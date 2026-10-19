@@ -50,6 +50,11 @@ public class PlayerActivity extends AppCompatActivity {
     private TextView tvTitle, tvDanmuStatus, tvDanmuMatch, tvSpeedHint, infoTextAudio, infoTextExtra;
     private Button btnCloudMode, btnBrightness, btnSkip, btnSleep;
     private boolean introSkipped = false, outroSkipped = false, outroListRequested = false;
+    /** 这次播放里用户改过的片头或片尾，服务端旧值不能盖掉。 */
+    private boolean skipIntroDirty, skipOutroDirty;
+    /** play/info 已经回来，之后的保存可以提交到服务端。 */
+    private boolean playInfoReady;
+    private int playInfoGen;
     private float playbackSpeed = 1.0f;
     private boolean speedBoost;
     private Runnable pendingOutroSkip;
@@ -355,6 +360,8 @@ public class PlayerActivity extends AppCompatActivity {
                 introSkipped = false;
                 outroSkipped = false;
                 outroListRequested = false;
+                skipIntroDirty = false;
+                skipOutroDirty = false;
                 cancelPendingOutroSkip();
                 itemGuid = guid;
                 itemTitle = title;
@@ -820,6 +827,8 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     private void loadPlayInfo() {
+        final int gen = ++playInfoGen;
+        playInfoReady = false;
         hdrNotified = false;
         if (cloudStreamManager != null) cloudStreamManager.resetSubtitleChoice();
         Map<String, String> b = new HashMap<>(); b.put("item_guid", itemGuid);
@@ -827,6 +836,7 @@ public class PlayerActivity extends AppCompatActivity {
         apiManager.getApi().getPlayInfo(b).enqueue(new retrofit2.Callback<ApiResponse<PlayInfoResponse>>() {
             @Override public void onResponse(retrofit2.Call<ApiResponse<PlayInfoResponse>> call,
                                              retrofit2.Response<ApiResponse<PlayInfoResponse>> r) {
+                if (gen != playInfoGen) return;
                 if (r.isSuccessful() && r.body() != null && r.body().code == 0 && r.body().data != null) {
                     PlayInfoResponse info = r.body().data;
                     mediaGuid = info.mediaGuid; videoGuid = info.videoGuid; audioGuid = info.audioGuid;
@@ -846,6 +856,7 @@ public class PlayerActivity extends AppCompatActivity {
                     subtitleGuid = info.subtitleGuid != null ? info.subtitleGuid : "_no_display_";
                     if (info.item != null && info.item.tvTitle != null) itemTV = info.item.tvTitle;
                     if (info.item != null) itemTitle = info.item.title;
+                    applyServerSkip(info.playConfig);
                     if (info.item != null && info.item.seasonNumber > 0) seasonNumber = info.item.seasonNumber;
                     if (info.item != null) getIntent().putExtra("episode_number", info.item.episodeNumber);
                     int epNum = info.item != null ? info.item.episodeNumber : 0;
@@ -870,9 +881,16 @@ public class PlayerActivity extends AppCompatActivity {
 
                     // 获取直链信息，获取完后开始播放
                     cloudStreamManager.fetchDirectLink(itemGuid, mediaGuid);
+                } else {
+                    playInfoReady = true;
+                    if (skipIntroDirty || skipOutroDirty) pushSkipConfig();
                 }
             }
-            @Override public void onFailure(retrofit2.Call<ApiResponse<PlayInfoResponse>> call, Throwable t) {}
+            @Override public void onFailure(retrofit2.Call<ApiResponse<PlayInfoResponse>> call, Throwable t) {
+                if (gen != playInfoGen) return;
+                playInfoReady = true;
+                if (skipIntroDirty || skipOutroDirty) pushSkipConfig();
+            }
         });
     }
 
@@ -1377,20 +1395,27 @@ public class PlayerActivity extends AppCompatActivity {
         focusSkipPage(dialog);
     }
 
+    /** 电视剧用父级 guid，电影用影片 guid。都没有时才用片名，兼容以前存在本地的设置。 */
+    private String skipCacheId() {
+        if (parentGuid != null && !parentGuid.isEmpty()) return parentGuid;
+        if (itemGuid != null && !itemGuid.isEmpty()) return itemGuid;
+        if (itemTV != null && !itemTV.isEmpty()) return itemTV;
+        return "";
+    }
+
     private String skipPrefsKey() {
-        String skipId = parentGuid != null && !parentGuid.isEmpty() ? parentGuid : itemTV;
-        return "skip_" + skipId;
+        return "skip_" + skipCacheId();
     }
 
     private int readSkipSec(boolean intro) {
         SharedPreferences sp = getSharedPreferences("fntv_prefs", MODE_PRIVATE);
         String suffix = intro ? "_intro" : "_outro";
-        int value = sp.getInt(skipPrefsKey() + suffix, 0);
-        if (value > 0) return value;
+        String key = skipPrefsKey() + suffix;
+        if (sp.contains(key)) return sp.getInt(key, 0);
         if (itemTV != null && !itemTV.isEmpty()) {
-            value = sp.getInt("skip_" + itemTV + suffix, 0);
+            return sp.getInt("skip_" + itemTV + suffix, 0);
         }
-        return value;
+        return 0;
     }
 
     private void writeSkipSec(boolean intro, int sec) {
@@ -1398,15 +1423,66 @@ public class PlayerActivity extends AppCompatActivity {
         getSharedPreferences("fntv_prefs", MODE_PRIVATE).edit()
                 .putInt(skipPrefsKey() + (intro ? "_intro" : "_outro"), saved).apply();
         if (intro) {
+            skipIntroDirty = true;
             introSkipped = false;
         } else {
+            skipOutroDirty = true;
             outroSkipped = false;
             cancelPendingOutroSkip();
         }
         refreshSkipMarks();
+        if (playInfoReady) pushSkipConfig();
         if (player == null) return;
         if (intro) maybeSkipIntro();
         else maybeSkipOutro(player.getCurrentPosition(), player.getDuration());
+    }
+
+    /** 把服务端账号上的片头片尾写入本地。用户这次已经改过的那一项保留。 */
+    private void applyServerSkip(PlayInfoResponse.PlayConfig config) {
+        String id = skipCacheId();
+        if (config != null && id != null && !id.isEmpty()) {
+            SharedPreferences.Editor editor = getSharedPreferences("fntv_prefs", MODE_PRIVATE).edit();
+            boolean wrote = false;
+            if (config.skipOpening != null && !skipIntroDirty) {
+                editor.putInt("skip_" + id + "_intro", Math.max(0, config.skipOpening));
+                wrote = true;
+            }
+            if (config.skipEnding != null && !skipOutroDirty) {
+                editor.putInt("skip_" + id + "_outro", Math.max(0, config.skipEnding));
+                wrote = true;
+            }
+            if (wrote) editor.apply();
+            Log.d(TAG, "片头片尾同步 guid=" + id
+                    + " opening=" + (config.skipOpening == null ? "null" : config.skipOpening)
+                    + " ending=" + (config.skipEnding == null ? "null" : config.skipEnding));
+        }
+        boolean migrate = false;
+        if (!skipIntroDirty && (config == null || config.skipOpening == null) && readSkipSec(true) > 0) migrate = true;
+        if (!skipOutroDirty && (config == null || config.skipEnding == null) && readSkipSec(false) > 0) migrate = true;
+        playInfoReady = true;
+        if (skipIntroDirty || skipOutroDirty || migrate) pushSkipConfig();
+        refreshSkipMarks();
+    }
+
+    /** 片头、片尾一起提交，避免只改一项时把另一项在服务端清掉。 */
+    private void pushSkipConfig() {
+        String guid = parentGuid != null && !parentGuid.isEmpty() ? parentGuid : itemGuid;
+        if (guid == null || guid.isEmpty() || apiManager == null) return;
+        Map<String, Object> body = new HashMap<>();
+        body.put("guid", guid);
+        body.put("skip_opening", readSkipSec(true));
+        body.put("skip_ending", readSkipSec(false));
+        Log.d(TAG, "setConfigByItem 请求: " + new com.google.gson.Gson().toJson(body));
+        apiManager.getApi().setSkipConfig(body).enqueue(new retrofit2.Callback<ApiResponse<Object>>() {
+            @Override public void onResponse(retrofit2.Call<ApiResponse<Object>> call,
+                                             retrofit2.Response<ApiResponse<Object>> response) {
+                String msg = response.body() != null ? "code=" + response.body().code + " msg=" + response.body().msg : "nullBody";
+                Log.d(TAG, "setConfigByItem 响应: HTTP " + response.code() + " " + msg);
+            }
+            @Override public void onFailure(retrofit2.Call<ApiResponse<Object>> call, Throwable t) {
+                Log.e(TAG, "setConfigByItem 失败: " + t.getMessage());
+            }
+        });
     }
 
     private void cancelPendingOutroSkip() {

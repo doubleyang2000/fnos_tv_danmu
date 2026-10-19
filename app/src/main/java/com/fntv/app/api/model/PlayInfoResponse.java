@@ -22,6 +22,17 @@ public class PlayInfoResponse {
     public String subtitleGuid;
     public long ts;
 
+    @SerializedName("play_config")
+    public PlayConfig playConfig;
+
+    /** 账号上的片头片尾。秒数，片尾是距结尾的秒数。字段缺省表示服务端没存过。 */
+    public static class PlayConfig {
+        @SerializedName("skip_opening")
+        public Integer skipOpening;
+        @SerializedName("skip_ending")
+        public Integer skipEnding;
+    }
+
     public ItemInfo item;
 
     public static class ItemInfo {

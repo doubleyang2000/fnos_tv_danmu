@@ -76,6 +76,9 @@ public interface FnApiService {
     @POST("api/v1/play/record")
     Call<ApiResponse<Object>> recordPlayStatus(@Body Object req);
 
+    @POST("api/v1/play/setConfigByItem")
+    Call<ApiResponse<Object>> setSkipConfig(@Body Object req);
+
     @GET("api/v1/play/list")
     Call<ApiResponse<List<PlayListItem>>> getPlayList();
 
