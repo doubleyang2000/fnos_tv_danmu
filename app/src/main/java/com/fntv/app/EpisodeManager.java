@@ -76,6 +76,11 @@ public class EpisodeManager {
         return episodeList != null && currentEpIndex >= 0 && currentEpIndex < episodeList.size() - 1;
     }
 
+    /** 已定位到当前集，而且后面没有下一集。 */
+    public boolean isLastEpisode() {
+        return episodeList != null && currentEpIndex >= 0 && currentEpIndex >= episodeList.size() - 1;
+    }
+
     public boolean isLoading() { return loadingEpisodes; }
 
     public boolean isLoaded() { return episodeList != null && !episodeList.isEmpty(); }

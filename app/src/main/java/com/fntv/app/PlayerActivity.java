@@ -26,6 +26,9 @@ import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
 
 import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory;
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
+import com.google.android.exoplayer2.audio.AudioCapabilities;
+import com.google.android.exoplayer2.audio.AudioSink;
+import com.google.android.exoplayer2.audio.DefaultAudioSink;
 import com.google.android.exoplayer2.ui.PlayerView;
 import com.google.android.exoplayer2.ui.CaptionStyleCompat;
 import java.util.HashMap;
@@ -46,8 +49,10 @@ public class PlayerActivity extends AppCompatActivity {
     private ImageView btnLock;
     private TextView tvTitle, tvDanmuStatus, tvDanmuMatch, tvSpeedHint, infoTextAudio, infoTextExtra;
     private Button btnCloudMode, btnBrightness, btnSkip, btnSleep;
-    private boolean introSkipped = false, outroSkipped = false;
-    private float speedBeforeLongPress = 1.0f;
+    private boolean introSkipped = false, outroSkipped = false, outroListRequested = false;
+    private float playbackSpeed = 1.0f;
+    private boolean speedBoost;
+    private Runnable pendingOutroSkip;
     private DanmuView danmuView;
     private View controller, infoPanel, topBar, moreScrim;
     private boolean moreOpen;
@@ -231,9 +236,8 @@ public class PlayerActivity extends AppCompatActivity {
                             if (gesture != GESTURE_NONE) return;
                             longPressing = true;
                             if (player != null) {
-                                speedBeforeLongPress = player.getPlaybackParameters().speed;
-                                player.setPlaybackSpeed(2.0f);
-                                danmuView.setPlaybackSpeed(2.0f);
+                                speedBoost = true;
+                                applyPlaybackSpeed();
                                 showCtrl(false);
                                 if (tvSpeedHint != null) {
                                     tvSpeedHint.setVisibility(View.VISIBLE);
@@ -279,8 +283,8 @@ public class PlayerActivity extends AppCompatActivity {
                         if (longPressing) {
                             longPressing = false;
                             if (player != null) {
-                                player.setPlaybackSpeed(speedBeforeLongPress);
-                                danmuView.setPlaybackSpeed(speedBeforeLongPress);
+                                speedBoost = false;
+                                applyPlaybackSpeed();
                             }
                             if (tvSpeedHint != null) {
                                 tvSpeedHint.setVisibility(View.GONE);
@@ -349,6 +353,8 @@ public class PlayerActivity extends AppCompatActivity {
                 progressHeld = true;
                 introSkipped = false;
                 outroSkipped = false;
+                outroListRequested = false;
+                cancelPendingOutroSkip();
                 itemGuid = guid;
                 itemTitle = title;
                 mediaGuid = null;
@@ -648,16 +654,12 @@ public class PlayerActivity extends AppCompatActivity {
                 win.setAttributes(lp);
             }
         }
-        DefaultRenderersFactory rf = new DefaultRenderersFactory(this);
-        if ("software".equals(getSharedPreferences("fntv_prefs", MODE_PRIVATE).getString("decoder_mode", "hardware"))) {
-            rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
-        } else {
-            rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
-        }
+        DefaultRenderersFactory rf = createRenderersFactory(false);
         DefaultTrackSelector trackSelector = new DefaultTrackSelector(this);
         trackSelector.setParameters(trackSelector.buildUponParameters()
                 .setPreferredTextLanguages("zh", "zh-Hans", "zh-CN", "chi", "zho", "cmn")
                 .setRendererDisabled(com.google.android.exoplayer2.C.TRACK_TYPE_TEXT, false)
+                .setTunnelingEnabled(false)
                 .build());
         player = new SimpleExoPlayer.Builder(this, rf)
                 .setTrackSelector(trackSelector)
@@ -713,6 +715,7 @@ public class PlayerActivity extends AppCompatActivity {
                     ensureSaveLoop(); updateTime();
                     if (firstReady) { scheduleInitialSave(); showCtrl(true); focusEntrySeekBar(); firstReady = false; }
                     syncPlayButton();
+                    applyPlaybackSpeed();
                     if (danmuManager != null) danmuManager.onPlayerReady();
                     if (cloudStreamManager != null) cloudStreamManager.applyDefaultChineseSubtitle();
                     // HDR 检测（延时等格式就绪）
@@ -726,17 +729,6 @@ public class PlayerActivity extends AppCompatActivity {
                                 + " 码率=" + af2.bitrate);
                     } else {
                         Log.d(TAG, "音轨: 无音频信息");
-                    }
-                    // 片头跳过（只开始触发一次，片尾在 updateTime 实时监测）
-                    if (!introSkipped && (parentGuid != null || (itemTV != null && !itemTV.isEmpty()))) {
-                        SharedPreferences sp = getSharedPreferences("fntv_prefs", MODE_PRIVATE);
-                        String skipId = parentGuid != null && !parentGuid.isEmpty() ? parentGuid : itemTV;
-                        int introSec = sp.getInt("skip_" + skipId + "_intro", 0);
-                        if (introSec > 0) {
-                            int pos = (int)(player.getCurrentPosition() / 1000);
-                            if (pos < introSec) { player.seekTo(introSec * 1000L); danmuManager.showDanmuStatus("跳过片头 " + introSec + "秒"); }
-                            introSkipped = true;
-                        }
                     }
                 } else if (s == Player.STATE_ENDED) {
                     Log.d(TAG, "STATE_ENDED hasNext=" + (episodeManager != null && episodeManager.hasNext()));
@@ -958,39 +950,11 @@ public class PlayerActivity extends AppCompatActivity {
             player.release();
             player = null;
         }
-        // 重新创建播放器（只允许 Google 软件解码器）
-        DefaultRenderersFactory rf2 = new DefaultRenderersFactory(this) {
-            @Override
-            protected void buildVideoRenderers(Context context, int extensionRendererMode,
-                                                com.google.android.exoplayer2.mediacodec.MediaCodecSelector mediaCodecSelector,
-                                                boolean enableDecoderFallback, android.os.Handler eventHandler,
-                                                com.google.android.exoplayer2.video.VideoRendererEventListener eventListener,
-                                                long allowedVideoJoiningTimeMs, java.util.ArrayList<Renderer> out) {
-                // 只保留 omx.google. 开头的软件解码器
-                com.google.android.exoplayer2.mediacodec.MediaCodecSelector googleOnly = new com.google.android.exoplayer2.mediacodec.MediaCodecSelector() {
-                    @Override
-                    public java.util.List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> getDecoderInfos(
-                            String mimeType, boolean requiresSecureDecoder, boolean requiresTunnelingDecoder)
-                            throws com.google.android.exoplayer2.mediacodec.MediaCodecUtil.DecoderQueryException {
-                        java.util.List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> all = com.google.android.exoplayer2.mediacodec.MediaCodecSelector.DEFAULT
-                                .getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder);
-                        java.util.List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> google = new java.util.ArrayList<>();
-                        for (com.google.android.exoplayer2.mediacodec.MediaCodecInfo info : all) {
-                            // omx.google.* = 旧版 Google 软解, c2.android.* = 新版 Google 软解
-                            if (info.name.startsWith("omx.google.") || info.name.startsWith("c2.android.")) {
-                                google.add(info);
-                            }
-                        }
-                        return !google.isEmpty() ? google : all;
-                    }
-                };
-                super.buildVideoRenderers(context, extensionRendererMode, googleOnly, enableDecoderFallback,
-                        eventHandler, eventListener, allowedVideoJoiningTimeMs, out);
-            }
-        };
-        rf2.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
+        DefaultRenderersFactory rf2 = createRenderersFactory(true);
+        DefaultTrackSelector swSelector = new DefaultTrackSelector(this);
+        swSelector.setParameters(swSelector.buildUponParameters().setTunnelingEnabled(false).build());
         player = new SimpleExoPlayer.Builder(this, rf2)
-                .setTrackSelector(new DefaultTrackSelector(this))
+                .setTrackSelector(swSelector)
                 .setLoadControl(createLoadControl())
                 .build();
         playerView.setPlayer(player);
@@ -1008,6 +972,8 @@ public class PlayerActivity extends AppCompatActivity {
                     progressHeld = false;
                     if (!seeked && seekTs > 0) { player.seekTo(seekTs); seeked = true; }
                     ensureSaveLoop();
+                    updateTime();
+                    applyPlaybackSpeed();
                     if (firstReady) { scheduleInitialSave(); showCtrl(true); focusEntrySeekBar(); firstReady = false; }
                     syncPlayButton();
                     if (cloudStreamManager != null) cloudStreamManager.applyDefaultChineseSubtitle();
@@ -1203,10 +1169,85 @@ public class PlayerActivity extends AppCompatActivity {
 
     private void cycleSpeed() {
         speedIdx = (speedIdx + 1) % speeds.length;
-        float s = speeds[speedIdx];
-        btnSpeed.setText(speedText(s));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) player.setPlaybackSpeed(s);
-        if (danmuManager != null) danmuView.setPlaybackSpeed(s);
+        playbackSpeed = speeds[speedIdx];
+        speedBoost = false;
+        btnSpeed.setText(speedText(playbackSpeed));
+        applyPlaybackSpeed();
+    }
+
+    /** 把当前倍速写进播放器。长按加速时暂时用 2 倍，松手回到用户选的倍速。 */
+    private void applyPlaybackSpeed() {
+        if (player == null) return;
+        float speed = speedBoost ? 2f : playbackSpeed;
+        PlaybackParameters now = player.getPlaybackParameters();
+        if (Math.abs(now.speed - speed) > 0.01f) {
+            player.setPlaybackParameters(new PlaybackParameters(speed));
+            Log.d(TAG, "倍速 " + speed);
+        }
+        if (danmuView != null) danmuView.setPlaybackSpeed(speed);
+    }
+
+    /**
+     * 电视盒子遇到杜比/DTS 会走音频直通，直通轨不接受倍速，画面就一直是 1 倍。
+     * 这里强制解成 PCM，倍速才能作用到声音和画面。
+     */
+    private DefaultRenderersFactory createRenderersFactory(boolean googleSoftwareVideo) {
+        boolean preferExtension = googleSoftwareVideo
+                || "software".equals(getSharedPreferences("fntv_prefs", MODE_PRIVATE)
+                .getString("decoder_mode", "hardware"));
+        DefaultRenderersFactory rf = new DefaultRenderersFactory(this) {
+            @Override
+            protected AudioSink buildAudioSink(Context context, boolean enableFloatOutput,
+                                                boolean enableAudioTrackPlaybackParams,
+                                                boolean enableOffload) {
+                return new DefaultAudioSink.Builder()
+                        .setAudioCapabilities(AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES)
+                        .setEnableFloatOutput(false)
+                        .setEnableAudioTrackPlaybackParams(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                        .setOffloadMode(DefaultAudioSink.OFFLOAD_MODE_DISABLED)
+                        .build();
+            }
+
+            @Override
+            protected void buildVideoRenderers(Context context, int extensionRendererMode,
+                                                com.google.android.exoplayer2.mediacodec.MediaCodecSelector mediaCodecSelector,
+                                                boolean enableDecoderFallback, android.os.Handler eventHandler,
+                                                com.google.android.exoplayer2.video.VideoRendererEventListener eventListener,
+                                                long allowedVideoJoiningTimeMs, java.util.ArrayList<Renderer> out) {
+                if (!googleSoftwareVideo) {
+                    super.buildVideoRenderers(context, extensionRendererMode, mediaCodecSelector,
+                            enableDecoderFallback, eventHandler, eventListener, allowedVideoJoiningTimeMs, out);
+                    return;
+                }
+                com.google.android.exoplayer2.mediacodec.MediaCodecSelector googleOnly =
+                        new com.google.android.exoplayer2.mediacodec.MediaCodecSelector() {
+                            @Override
+                            public java.util.List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> getDecoderInfos(
+                                    String mimeType, boolean requiresSecureDecoder, boolean requiresTunnelingDecoder)
+                                    throws com.google.android.exoplayer2.mediacodec.MediaCodecUtil.DecoderQueryException {
+                                java.util.List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> all =
+                                        com.google.android.exoplayer2.mediacodec.MediaCodecSelector.DEFAULT
+                                                .getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder);
+                                java.util.List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> google =
+                                        new java.util.ArrayList<>();
+                                for (com.google.android.exoplayer2.mediacodec.MediaCodecInfo info : all) {
+                                    if (info.name.startsWith("omx.google.") || info.name.startsWith("c2.android.")) {
+                                        google.add(info);
+                                    }
+                                }
+                                return !google.isEmpty() ? google : all;
+                            }
+                        };
+                super.buildVideoRenderers(context, extensionRendererMode, googleOnly, enableDecoderFallback,
+                        eventHandler, eventListener, allowedVideoJoiningTimeMs, out);
+            }
+        };
+        rf.setExtensionRendererMode(preferExtension
+                ? DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                : DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
+        rf.setEnableDecoderFallback(true);
+        rf.setEnableAudioTrackPlaybackParams(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M);
+        return rf;
     }
 
     private String speedText(float s) {
@@ -1341,17 +1382,97 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     private int readSkipSec(boolean intro) {
-        return getSharedPreferences("fntv_prefs", MODE_PRIVATE)
-                .getInt(skipPrefsKey() + (intro ? "_intro" : "_outro"), 0);
+        SharedPreferences sp = getSharedPreferences("fntv_prefs", MODE_PRIVATE);
+        String suffix = intro ? "_intro" : "_outro";
+        int value = sp.getInt(skipPrefsKey() + suffix, 0);
+        if (value > 0) return value;
+        if (itemTV != null && !itemTV.isEmpty()) {
+            value = sp.getInt("skip_" + itemTV + suffix, 0);
+        }
+        return value;
     }
 
     private void writeSkipSec(boolean intro, int sec) {
         int saved = Math.max(0, Math.min(sec, 20 * 60));
         getSharedPreferences("fntv_prefs", MODE_PRIVATE).edit()
                 .putInt(skipPrefsKey() + (intro ? "_intro" : "_outro"), saved).apply();
-        if (intro) introSkipped = false;
-        else outroSkipped = false;
+        if (intro) {
+            introSkipped = false;
+        } else {
+            outroSkipped = false;
+            cancelPendingOutroSkip();
+        }
         refreshSkipMarks();
+        if (player == null) return;
+        if (intro) maybeSkipIntro();
+        else maybeSkipOutro(player.getCurrentPosition(), player.getDuration());
+    }
+
+    private void cancelPendingOutroSkip() {
+        if (pendingOutroSkip == null) return;
+        handler.removeCallbacks(pendingOutroSkip);
+        pendingOutroSkip = null;
+    }
+
+    /** 片头只在还没播过设定点时跳一次。续播位置还没落到播放器上时先不判断。 */
+    private void maybeSkipIntro() {
+        if (introSkipped || player == null) return;
+        int introSec = readSkipSec(true);
+        if (introSec <= 0) return;
+        long introMs = introSec * 1000L;
+        long pos = player.getCurrentPosition();
+        if (seekTs > introMs && pos + 1500 < seekTs) return;
+        if (pos < introMs) {
+            introSkipped = true;
+            player.seekTo(introMs);
+            if (danmuManager != null) danmuManager.showDanmuStatus("跳过片头 " + introSec + "秒");
+        } else {
+            introSkipped = true;
+        }
+    }
+
+    /**
+     * 进入片尾区间才跳。剧集列表还在加载时不记账，否则第一次到片尾会把机会用掉，
+     * 要重新保存一次才会再跳。
+     */
+    private void maybeSkipOutro(long cur, long dur) {
+        if (player == null || dur <= 0) return;
+        int outroSec = readSkipSec(false);
+        if (outroSec <= 0) return;
+        long skipAt = dur - outroSec * 1000L;
+        if (skipAt <= 0) return;
+        if (cur + 1500 < skipAt) {
+            cancelPendingOutroSkip();
+            outroSkipped = false;
+            return;
+        }
+        if (outroSkipped || cur < skipAt) return;
+        if (episodeManager != null && episodeManager.isLoading()) return;
+        if (episodeManager != null && !episodeManager.isLoaded() && !episodeManager.isLoading()
+                && parentGuid != null && !parentGuid.isEmpty()) {
+            if (!outroListRequested) {
+                outroListRequested = true;
+                episodeManager.loadList(parentGuid);
+            }
+            return;
+        }
+        if (episodeManager != null && episodeManager.hasNext()) {
+            outroSkipped = true;
+            if (danmuManager != null) danmuManager.showDanmuStatus("检测到片尾，即将跳过");
+            cancelPendingOutroSkip();
+            pendingOutroSkip = () -> {
+                pendingOutroSkip = null;
+                if (episodeManager != null && episodeManager.hasNext()) episodeManager.playNext();
+            };
+            handler.postDelayed(pendingOutroSkip, 1000);
+            return;
+        }
+        boolean movie = parentGuid == null || parentGuid.isEmpty();
+        if (movie || (episodeManager != null && episodeManager.isLastEpisode())) {
+            outroSkipped = true;
+            if (danmuManager != null) danmuManager.showDanmuStatus("跳过片尾");
+            player.seekTo(Math.max(0, dur - 300));
+        }
     }
 
     /** 把已保存的片头、片尾画到进度条上。片尾记的是距结尾的秒数。 */
@@ -2509,21 +2630,9 @@ public class PlayerActivity extends AppCompatActivity {
         long buffered = player.getBufferedPosition();
         seekBar.setSecondaryProgress((int) buffered);
         if (danmuManager != null) danmuManager.setPlayTime(cur);
-        // 实时监测片尾位置
-        if (!outroSkipped && dur > 0) {
-            SharedPreferences sp = getSharedPreferences("fntv_prefs", MODE_PRIVATE);
-            String sid = parentGuid != null && !parentGuid.isEmpty() ? parentGuid : (itemTV != null ? itemTV : null);
-            if (sid != null) {
-                int outroSec = sp.getInt("skip_" + sid + "_outro", 0);
-                if (outroSec > 0) Log.d(TAG, "片尾检测: cur=" + (cur/1000) + "s dur=" + (dur/1000) + "s 阈值=" + (dur/1000 - outroSec) + "s");
-                if (outroSec > 0 && cur / 1000 > dur / 1000 - outroSec) {
-                    outroSkipped = true;
-                    if (episodeManager != null && episodeManager.hasNext()) {
-                        danmuManager.showDanmuStatus("检测到片尾，即将跳过");
-                        handler.postDelayed(() -> episodeManager.playNext(), 3000);
-                    }
-                }
-            }
+        if (!progressHeld) {
+            maybeSkipIntro();
+            maybeSkipOutro(cur, dur);
         }
         handler.postDelayed(timeR, 200);
     }
