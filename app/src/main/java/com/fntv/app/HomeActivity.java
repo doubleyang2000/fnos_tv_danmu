@@ -321,6 +321,7 @@ public class HomeActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         SessionGuard.attach(this);
+        if (updateManager != null) updateManager.setInForeground(true);
         if (updateManager != null && pendingLaunchCheck) {
             pendingLaunchCheck = false;
             updateManager.checkOnLaunch();
@@ -340,6 +341,12 @@ public class HomeActivity extends AppCompatActivity {
         } else if (currentTab == 0 && !overviewBuilt && showingOverview && !overviewLoading) {
             loadOverview();
         }
+    }
+
+    @Override
+    protected void onPause() {
+        if (updateManager != null) updateManager.setInForeground(false);
+        super.onPause();
     }
 
 

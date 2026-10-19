@@ -36,6 +36,8 @@ public class UpdateManager {
     private boolean busy;
     /** 自动检查时不改按钮焦点，也不提示“已是最新”或网络失败。 */
     private boolean quiet;
+    /** 首页是否在前台。公开 SDK 没有 Activity.isResumed。 */
+    private boolean inForeground;
     private Dialog updateDialog;
     private boolean hasPending;
     private String pendingTitle;
@@ -66,6 +68,10 @@ public class UpdateManager {
         btnCheckUpdate.setOnClickListener(v -> checkUpdate());
     }
 
+    public void setInForeground(boolean inForeground) {
+        this.inForeground = inForeground;
+    }
+
     /** 打开应用时检查。已是最新或连不上服务器时不提示。 */
     public void checkOnLaunch() {
         if (updateDialog != null && updateDialog.isShowing()) return;
@@ -79,7 +85,7 @@ public class UpdateManager {
     /** 检查结果回来时界面不在前台，回到首页后再弹出。 */
     public void showPendingPrompt() {
         if (!hasPending || busy) return;
-        if (!canPrompt() || !activity.isResumed()) return;
+        if (!canPrompt() || !inForeground) return;
         hasPending = false;
         busy = true;
         quiet = true;
@@ -208,7 +214,7 @@ public class UpdateManager {
             resetBtn();
             return;
         }
-        if (quiet && !activity.isResumed()) {
+        if (quiet && !inForeground) {
             hasPending = true;
             pendingTitle = title;
             pendingChangelog = changelog;
