@@ -106,6 +106,10 @@ public class PlayerActivity extends AppCompatActivity {
     private String streamResolution = "";
     private boolean hdrNotified = false; // HDR 已提示过一次
     private boolean firstReady = true;   // 首次进入 READY（用于控制初始 UI 显示）
+    private boolean resumePromptShown;
+    private View resumeBar;
+    private Button btnRestart;
+    private final Runnable hideResumePromptR = () -> hideResumePrompt(true);
     private long lastProgressMs;
     private long lastSaveUptime;
     private long lastSavedTs = -1;
@@ -172,6 +176,9 @@ public class PlayerActivity extends AppCompatActivity {
         btnCloudMode = findViewById(R.id.btnCloudMode);
         tvDanmuMatch = findViewById(R.id.tvDanmuMatch);
         tvSpeedHint = findViewById(R.id.tvSpeedHint);
+        resumeBar = findViewById(R.id.resumeBar);
+        btnRestart = findViewById(R.id.btnRestart);
+        if (btnRestart != null) btnRestart.setOnClickListener(v -> restartFromBeginning());
         topBar = findViewById(R.id.topBar);
         controller = findViewById(R.id.controller);
         controller.setOnTouchListener((v, e) -> true);
@@ -363,6 +370,8 @@ public class PlayerActivity extends AppCompatActivity {
                 skipIntroDirty = false;
                 skipOutroDirty = false;
                 cancelPendingOutroSkip();
+                hideResumePrompt(false);
+                if (danmuManager != null) danmuManager.setHoldStatus(true);
                 itemGuid = guid;
                 itemTitle = title;
                 mediaGuid = null;
@@ -641,6 +650,46 @@ public class PlayerActivity extends AppCompatActivity {
         });
     }
 
+    /** 续播时提示可以回到片头。只在这次进入播放器时出现一次。 */
+    private void offerResumeRestart() {
+        if (resumePromptShown || resumeBar == null || seekTs <= 0) return;
+        resumePromptShown = true;
+        resumeBar.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(hideResumePromptR);
+        handler.postDelayed(hideResumePromptR, 8000);
+        resumeBar.post(() -> {
+            wirePlayerFocus();
+            if (btnRestart != null && !btnRestart.requestFocus()) btnRestart.post(btnRestart::requestFocus);
+        });
+    }
+
+    private void hideResumePrompt(boolean returnFocus) {
+        handler.removeCallbacks(hideResumePromptR);
+        if (resumeBar == null || resumeBar.getVisibility() != View.VISIBLE) return;
+        boolean focused = btnRestart != null && btnRestart.hasFocus();
+        resumeBar.setVisibility(View.GONE);
+        wirePlayerFocus();
+        if (returnFocus && focused && ctrlVis && seekBar != null) seekBar.requestFocus();
+    }
+
+    private void restartFromBeginning() {
+        hideResumePrompt(false);
+        seekTs = 0;
+        seeked = true;
+        introSkipped = true;
+        outroSkipped = false;
+        outroListRequested = false;
+        cancelPendingOutroSkip();
+        if (player != null) {
+            player.seekTo(0);
+            if (danmuManager != null) danmuManager.onSeekTo(0);
+        }
+        updateTime();
+        if (ctrlVis && seekBar != null) {
+            if (!seekBar.requestFocus()) seekBar.post(seekBar::requestFocus);
+        }
+    }
+
     private void initPlayer() {
         // 强制最高刷新率（Android 11+）
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -719,9 +768,12 @@ public class PlayerActivity extends AppCompatActivity {
                 tvBuffering.setVisibility(s == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
                 if (s == Player.STATE_READY) {
                     progressHeld = false;
-                    if (!seeked && seekTs > 0) { player.seekTo(seekTs); seeked = true; }
+                    if (danmuManager != null) danmuManager.setHoldStatus(false);
+                    boolean resumedNow = !seeked && seekTs > 0;
+                    if (resumedNow) { player.seekTo(seekTs); seeked = true; }
                     ensureSaveLoop(); updateTime();
                     if (firstReady) { scheduleInitialSave(); showCtrl(true); focusEntrySeekBar(); firstReady = false; }
+                    if (resumedNow) offerResumeRestart();
                     syncPlayButton();
                     applyPlaybackSpeed();
                     if (danmuManager != null) danmuManager.onPlayerReady();
@@ -989,11 +1041,14 @@ public class PlayerActivity extends AppCompatActivity {
                 tvBuffering.setVisibility(s == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
                 if (s == Player.STATE_READY) {
                     progressHeld = false;
-                    if (!seeked && seekTs > 0) { player.seekTo(seekTs); seeked = true; }
+                    if (danmuManager != null) danmuManager.setHoldStatus(false);
+                    boolean resumedNow = !seeked && seekTs > 0;
+                    if (resumedNow) { player.seekTo(seekTs); seeked = true; }
                     ensureSaveLoop();
                     updateTime();
                     applyPlaybackSpeed();
                     if (firstReady) { scheduleInitialSave(); showCtrl(true); focusEntrySeekBar(); firstReady = false; }
+                    if (resumedNow) offerResumeRestart();
                     syncPlayButton();
                     if (cloudStreamManager != null) cloudStreamManager.applyDefaultChineseSubtitle();
                 } else if (s == Player.STATE_ENDED) {
@@ -2565,6 +2620,18 @@ public class PlayerActivity extends AppCompatActivity {
             // 进度条下移：首次暂停，之后回到上次选过的底栏按钮
             TvFocus.bindDownToRow(seek, bottom);
             TvFocus.bindUp(bottom, seek.get(0));
+        }
+        if (resumeBar != null && resumeBar.getVisibility() == View.VISIBLE && btnRestart != null && !seek.isEmpty()) {
+            java.util.List<View> resume = TvFocus.present(btnRestart);
+            if (!resume.isEmpty()) {
+                TvFocus.bindVertical(resume, seek);
+                for (View v : resume) {
+                    TvFocus.point(v, View.FOCUS_UP, v);
+                    TvFocus.point(v, View.FOCUS_LEFT, v);
+                    TvFocus.point(v, View.FOCUS_RIGHT, v);
+                }
+                TvFocus.sealAll(resume);
+            }
         }
         for (View v : top) TvFocus.point(v, View.FOCUS_UP, v);
         for (View v : bottom) TvFocus.point(v, View.FOCUS_DOWN, v);

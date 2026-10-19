@@ -171,6 +171,47 @@
             android:nextFocusUp="@+id/btnMore"
         android:visibility="invisible" />
 
+    <!-- 续播提示：定位到上次进度，可从头开始 -->
+    <LinearLayout
+        android:id="@+id/resumeBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="156dp"
+        android:background="@drawable/bg_danmu_status"
+        android:elevation="10dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="16dp"
+        android:paddingTop="8dp"
+        android:paddingRight="8dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="已为您定位到上次播放位置，是否从头开始"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnRestart"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginLeft="12dp"
+            android:background="@drawable/bg_btn_primary"
+            android:focusable="true"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:paddingLeft="14dp"
+            android:paddingRight="14dp"
+            android:text="从头开始"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp" />
+    </LinearLayout>
+
     <!-- 控制层 (底部深色渐变区) -->
     <LinearLayout
         android:id="@+id/controller"

@@ -132,17 +132,45 @@ public class DanmuManager {
         return danmuOn;
     }
 
+    /** 切集期间先攒着，等下一集真正开播再显示最后一条。 */
+    private boolean holdStatus;
+    private String pendingStatus;
+
     /** 显示弹幕状态提示（可被外部调用，如 HDR/片头跳过提示） */
     public void showDanmuStatus(String msg) {
         activity.runOnUiThread(() -> {
-            if (tvDanmuStatus != null) {
-                tvDanmuStatus.setText(msg);
-                tvDanmuStatus.setVisibility(View.VISIBLE);
-                handler.removeCallbacks(hideDanmuStatus);
-                handler.postDelayed(hideDanmuStatus, 6000);
-            }
             Log.d(TAG, "[弹幕] " + msg);
+            if (holdStatus) {
+                pendingStatus = msg;
+                return;
+            }
+            revealDanmuStatus(msg);
         });
+    }
+
+    /** 切到下一集时压住弹幕提示。开播后放出最后一条。 */
+    public void setHoldStatus(boolean hold) {
+        activity.runOnUiThread(() -> {
+            holdStatus = hold;
+            if (hold) {
+                pendingStatus = null;
+                if (tvDanmuStatus != null) tvDanmuStatus.setVisibility(View.GONE);
+                handler.removeCallbacks(hideDanmuStatus);
+                return;
+            }
+            if (pendingStatus == null) return;
+            String msg = pendingStatus;
+            pendingStatus = null;
+            revealDanmuStatus(msg);
+        });
+    }
+
+    private void revealDanmuStatus(String msg) {
+        if (tvDanmuStatus == null) return;
+        tvDanmuStatus.setText(msg);
+        tvDanmuStatus.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(hideDanmuStatus);
+        handler.postDelayed(hideDanmuStatus, 6000);
     }
 
     /** 更新弹幕匹配名显示 */
