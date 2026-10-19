@@ -138,6 +138,8 @@ public class HomeActivity extends AppCompatActivity {
     private int pendingReturnScrollY = -1;
     private boolean suppressBrowseAutoFocus;
     private static final int EPISODE_PAGE = 30;
+    /** 进程刚启动，或整个应用退到后台后再回来，才自动检查更新。 */
+    private static boolean pendingLaunchCheck = true;
 
     /** 离开列表进详情时，把这一页的子视图先摘下来。 */
     private static class ParkedPage {
@@ -178,6 +180,7 @@ public class HomeActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         t0 = System.currentTimeMillis();
         super.onCreate(savedInstanceState);
+        SessionGuard.attach(this);
         setContentView(R.layout.activity_home);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -307,8 +310,23 @@ public class HomeActivity extends AppCompatActivity {
 
     @Override
 
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level == android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            pendingLaunchCheck = true;
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        SessionGuard.attach(this);
+        if (updateManager != null && pendingLaunchCheck) {
+            pendingLaunchCheck = false;
+            updateManager.checkOnLaunch();
+        } else if (updateManager != null) {
+            updateManager.showPendingPrompt();
+        }
         if (savedDetailItem != null) {
             restoreDetailPage();
         } else if (currentTab == 0 && !mediaLibraries.isEmpty() && overviewBuilt && showingOverview) {
@@ -580,14 +598,20 @@ public class HomeActivity extends AppCompatActivity {
                 if (response.body() != null && response.body().code != 0) {
                     try { Log.w("Overview", "错误响应: " + new com.google.gson.Gson().toJson(response.body())); } catch (Exception ignored) {}
                 }
-                // Auth Failed 时重试一次，这次不算结束
-                if (response.body() != null && response.body().code == -2 && retryCount[0] > 0) {
+                Integer apiCode = response.body() != null ? response.body().code : null;
+                if (SessionGuard.isAuthFailure(response.code(), apiCode) && retryCount[0] > 0) {
                     retryCount[0]--;
                     Log.d("Overview", "Auth Failed，重试中...");
                     call.clone().enqueue(this);
                     return;
                 }
                 overviewLoading = false;
+                if (SessionGuard.isAuthFailure(response.code(), apiCode)) {
+                    tvMoviesLoading.setVisibility(View.GONE);
+                    finishHomeSwipe();
+                    SessionGuard.expire();
+                    return;
+                }
                 if (response.isSuccessful() && response.body() != null && response.body().code == 0
                         && response.body().data != null && !response.body().data.isEmpty()) {
                     mediaLibraries.clear();
@@ -3489,12 +3513,16 @@ public class HomeActivity extends AppCompatActivity {
             @Override
             public void onResponse(Call<ApiResponse<List<MediaDbItem>>> call,
                                    Response<ApiResponse<List<MediaDbItem>>> response) {
-                tvLibraryLoading.setVisibility(View.GONE);
-                // Auth Failed 时重试一次
-                if (response.body() != null && response.body().code == -2 && retryCount[0] > 0) {
+                Integer apiCode = response.body() != null ? response.body().code : null;
+                if (SessionGuard.isAuthFailure(response.code(), apiCode) && retryCount[0] > 0) {
                     retryCount[0]--;
                     Log.d("Home", "Auth Failed，重试中...");
                     call.clone().enqueue(this);
+                    return;
+                }
+                tvLibraryLoading.setVisibility(View.GONE);
+                if (SessionGuard.isAuthFailure(response.code(), apiCode)) {
+                    SessionGuard.expire();
                     return;
                 }
                 if (response.isSuccessful() && response.body() != null && response.body().code == 0

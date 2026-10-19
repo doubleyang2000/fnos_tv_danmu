@@ -24,9 +24,15 @@ public class SearchHelper {
             @Override
             public void onResponse(Call<ApiResponse<List<PlayListItem>>> call,
                                    Response<ApiResponse<List<PlayListItem>>> response) {
-                if (response.body() != null && response.body().code == -2 && retryCount[0] > 0) {
+                Integer apiCode = response.body() != null ? response.body().code : null;
+                if (SessionGuard.isAuthFailure(response.code(), apiCode) && retryCount[0] > 0) {
                     retryCount[0]--;
                     call.clone().enqueue(this);
+                    return;
+                }
+                if (SessionGuard.isAuthFailure(response.code(), apiCode)) {
+                    callback.onError("登录已失效");
+                    SessionGuard.expire();
                     return;
                 }
 

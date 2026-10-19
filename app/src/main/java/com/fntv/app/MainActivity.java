@@ -50,6 +50,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        SessionGuard.attach(this);
         setContentView(R.layout.activity_main);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -63,6 +64,9 @@ public class MainActivity extends AppCompatActivity {
             startActivity(new Intent(this, HomeActivity.class));
             finish();
             return;
+        }
+        if (getIntent().getBooleanExtra("auth_expired", false)) {
+            AppToast.show(this, "登录已失效，请重新登录", true);
         }
         density = getResources().getDisplayMetrics().density;
         btnLogin = findViewById(R.id.btnLogin);
@@ -466,6 +470,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void onFnIdLoginSuccess(String token, String domain, String user, String pass) {
         FnApiManager.getInstance().setToken(token);
+        SessionGuard.onLogin();
         // 保存 FN ID（用户输入的原值）到 fnid_host，domain 真实地址只存 host
         String rawFnId = fnidHostEt.getText().toString().trim();
         SharedPreferences.Editor e = prefs.edit();
@@ -510,6 +515,7 @@ public class MainActivity extends AppCompatActivity {
                     if (response.body().code == 0) {
                         String token = response.body().data.token;
                         FnApiManager.getInstance().setToken(token);
+                        SessionGuard.onLogin();
                         prefs.edit().putString("auth_token", token).apply();
                         Log.i(TAG, "HTTP 登录成功！耗时 " + (System.currentTimeMillis() - loginStartTime) + "ms");
                         AppToast.show(MainActivity.this, "登录成功！");
@@ -540,6 +546,7 @@ public class MainActivity extends AppCompatActivity {
         if (token.isEmpty() || host.isEmpty()) return false;
         FnApiManager.getInstance().updateBaseUrl(host);
         FnApiManager.getInstance().setToken(token);
+        SessionGuard.onLogin();
         return true;
     }
 

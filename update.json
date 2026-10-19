@@ -1,7 +1,7 @@
 {
-    "versionCode": 9527020,
-    "versionName": "9527.020",
-    "apkUrl": "https://ghfast.top/https://github.com/lxlry/fnos_tv_danmu/releases/download/9527.020/FNTV_release_v9527.020.apk",
-    "changelog": "修复倍速无效，以及片尾设置后不跳过的问题",
+    "versionCode": 9527021,
+    "versionName": "9527.021",
+    "apkUrl": "https://ghfast.top/https://github.com/lxlry/fnos_tv_danmu/releases/download/9527.021/FNTV_release_v9527.021.apk",
+    "changelog": "打开应用时自动检查更新；登录失效后返回登录页",
     "forceUpdate": false
 }

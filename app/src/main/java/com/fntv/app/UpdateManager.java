@@ -34,6 +34,16 @@ public class UpdateManager {
     private final Button btnCheckUpdate;
     private final int currentVersionCode;
     private boolean busy;
+    /** 自动检查时不改按钮焦点，也不提示“已是最新”或网络失败。 */
+    private boolean quiet;
+    private Dialog updateDialog;
+    private boolean hasPending;
+    private String pendingTitle;
+    private String pendingChangelog;
+    private String pendingApkUrl;
+    private boolean pendingForce;
+    private boolean pendingTest;
+    private int pendingVersion;
 
     /** 更新源（按优先级） */
     private static final String[] UPDATE_URLS = {
@@ -56,20 +66,52 @@ public class UpdateManager {
         btnCheckUpdate.setOnClickListener(v -> checkUpdate());
     }
 
+    /** 打开应用时检查。已是最新或连不上服务器时不提示。 */
+    public void checkOnLaunch() {
+        if (updateDialog != null && updateDialog.isShowing()) return;
+        if (hasPending) {
+            showPendingPrompt();
+            return;
+        }
+        startCheck(true);
+    }
+
+    /** 检查结果回来时界面不在前台，回到首页后再弹出。 */
+    public void showPendingPrompt() {
+        if (!hasPending || busy) return;
+        if (!canPrompt() || !activity.isResumed()) return;
+        hasPending = false;
+        busy = true;
+        quiet = true;
+        showUpdateDialog(pendingTitle, pendingChangelog, pendingForce, pendingApkUrl, pendingVersion, pendingTest);
+    }
+
     private void resetBtn() {
         busy = false;
+        boolean stayPut = quiet;
+        quiet = false;
+        if (btnCheckUpdate == null) return;
         btnCheckUpdate.setEnabled(true);
         btnCheckUpdate.setText("检查更新");
-        btnCheckUpdate.requestFocus();
+        if (!stayPut) btnCheckUpdate.requestFocus();
     }
 
     // ========== 检查更新 ==========
 
     public void checkUpdate() {
+        startCheck(false);
+    }
+
+    private void startCheck(boolean quietCheck) {
         if (busy) return;
+        if (!canPrompt()) return;
         busy = true;
-        btnCheckUpdate.setText("检查中...");
-        btnCheckUpdate.requestFocus();
+        quiet = quietCheck;
+        if (!quietCheck && btnCheckUpdate != null) {
+            btnCheckUpdate.setEnabled(false);
+            btnCheckUpdate.setText("检查中...");
+            btnCheckUpdate.requestFocus();
+        }
         new Thread(() -> {
             try {
                 org.json.JSONObject json = null;
@@ -117,7 +159,7 @@ public class UpdateManager {
 
                 if (json == null) {
                     activity.runOnUiThread(() -> {
-                        AppToast.show(activity, "检查更新失败，无法连接更新服务器", true);
+                        if (!quiet) AppToast.show(activity, "检查更新失败，无法连接更新服务器", true);
                         resetBtn();
                     });
                     return;
@@ -131,10 +173,10 @@ public class UpdateManager {
 
                 Log.d(TAG, "远程: v" + remoteVersion + " 本地: v" + currentVersionCode + " 来源: " + usedUrl);
 
-                final boolean isTestInstall = BuildConfig.DEBUG && remoteVersion <= currentVersionCode;
+                final boolean isTestInstall = !quiet && BuildConfig.DEBUG && remoteVersion <= currentVersionCode;
                 if (remoteVersion <= currentVersionCode && !isTestInstall) {
                     activity.runOnUiThread(() -> {
-                        AppToast.show(activity, "已是最新版本");
+                        if (!quiet) AppToast.show(activity, "已是最新版本");
                         resetBtn();
                     });
                     return;
@@ -143,16 +185,41 @@ public class UpdateManager {
                 final int fRemoteVersion = remoteVersion;
                 final String label = isTestInstall ? "测试安装（版本号不高于当前）" : "发现新版本 v" + versionName;
                 activity.runOnUiThread(() ->
-                        showUpdateDialog(label, changelog, forceUpdate, apkUrl, fRemoteVersion, isTestInstall));
+                        offerUpdate(label, changelog, forceUpdate, apkUrl, fRemoteVersion, isTestInstall));
 
             } catch (Exception e) {
                 Log.e(TAG, "检查更新异常", e);
                 activity.runOnUiThread(() -> {
-                    AppToast.show(activity, "检查更新失败: " + e.getMessage(), true);
+                    if (!quiet) AppToast.show(activity, "检查更新失败: " + e.getMessage(), true);
                     resetBtn();
                 });
             }
         }).start();
+    }
+
+    private boolean canPrompt() {
+        if (activity.isFinishing()) return false;
+        return android.os.Build.VERSION.SDK_INT < 17 || !activity.isDestroyed();
+    }
+
+    private void offerUpdate(String title, String changelog, boolean forceUpdate, String apkUrl,
+                             int remoteVersion, boolean isTestInstall) {
+        if (!canPrompt()) {
+            resetBtn();
+            return;
+        }
+        if (quiet && !activity.isResumed()) {
+            hasPending = true;
+            pendingTitle = title;
+            pendingChangelog = changelog;
+            pendingForce = forceUpdate;
+            pendingApkUrl = apkUrl;
+            pendingVersion = remoteVersion;
+            pendingTest = isTestInstall;
+            busy = false;
+            return;
+        }
+        showUpdateDialog(title, changelog, forceUpdate, apkUrl, remoteVersion, isTestInstall);
     }
 
     // ========== 更新弹窗 ==========
@@ -160,11 +227,14 @@ public class UpdateManager {
     private void showUpdateDialog(final String title, final String changelog,
                                    final boolean forceUpdate, final String apkUrl,
                                    final int remoteVersion, final boolean isTestInstall) {
+        if (updateDialog != null && updateDialog.isShowing()) return;
         final Dialog dialog = new Dialog(activity, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar);
+        updateDialog = dialog;
         dialog.setCancelable(!forceUpdate);
         dialog.setCanceledOnTouchOutside(!forceUpdate);
         final boolean[] accepted = {false};
         dialog.setOnDismissListener(d -> {
+            if (updateDialog == dialog) updateDialog = null;
             if (!accepted[0] && !forceUpdate) resetBtn();
         });
 
@@ -228,8 +298,9 @@ public class UpdateManager {
         update.setLayoutParams(updateLp);
         update.setOnClickListener(v -> {
             accepted[0] = true;
+            boolean quietDownload = quiet;
             dialog.dismiss();
-            downloadAndInstall(apkUrl, remoteVersion, isTestInstall);
+            downloadAndInstall(apkUrl, remoteVersion, isTestInstall, quietDownload);
         });
 
         actions.addView(later);
@@ -250,10 +321,14 @@ public class UpdateManager {
 
     // ========== 下载 ==========
 
-    private void downloadAndInstall(final String apkUrl, final int remoteVersion, final boolean isTestInstall) {
+    private void downloadAndInstall(final String apkUrl, final int remoteVersion, final boolean isTestInstall,
+                                     final boolean quietDownload) {
         busy = true;
-        btnCheckUpdate.setText(isTestInstall ? "测试中..." : "下载中...");
-        btnCheckUpdate.requestFocus();
+        quiet = quietDownload;
+        if (btnCheckUpdate != null) {
+            btnCheckUpdate.setText(isTestInstall ? "测试中..." : "下载中...");
+            if (!quietDownload) btnCheckUpdate.requestFocus();
+        }
         new Thread(() -> {
             try {
                 HttpURLConnection c = (HttpURLConnection) new URL(apkUrl).openConnection();
