@@ -192,6 +192,15 @@ public class UpdateManager {
                     return;
                 }
 
+                if (!releaseApkReady(apkUrl, versionName)) {
+                    Log.d(TAG, "安装包尚未发布，暂不提示更新");
+                    activity.runOnUiThread(() -> {
+                        if (!quiet) AppToast.show(activity, "新版本还在打包，请稍后再试");
+                        resetBtn();
+                    });
+                    return;
+                }
+
                 final int fRemoteVersion = remoteVersion;
                 final String label = isTestInstall ? "测试安装（版本号不高于当前）" : "发现新版本 v" + versionName;
                 activity.runOnUiThread(() ->
@@ -205,6 +214,90 @@ public class UpdateManager {
                 });
             }
         }).start();
+    }
+
+    /** 对应 Release 里已经有这个 apk，才提示更新。发布前或接口失败都视为还没有。 */
+    private boolean releaseApkReady(String apkUrl, String versionName) {
+        String repo = "lxlry/fnos_tv_danmu";
+        String tag = versionName == null ? "" : versionName;
+        String fileName = "FNTV_release_v" + tag + ".apk";
+        if (apkUrl != null) {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("github\\.com/([^/]+/[^/]+)/releases/download/([^/]+)/([^?#]+)")
+                    .matcher(apkUrl);
+            if (m.find()) {
+                repo = m.group(1);
+                tag = decodeUrl(m.group(2));
+                fileName = decodeUrl(m.group(3));
+            }
+        }
+        if (tag.isEmpty() || fileName.isEmpty()) return false;
+        String api = "https://api.github.com/repos/" + repo + "/releases/tags/" + encodePath(tag);
+        String[] urls = {
+                api,
+                "https://ghfast.top/" + api
+        };
+        for (String url : urls) {
+            Boolean ready = releaseHasAsset(url, fileName);
+            if (ready != null) return ready;
+        }
+        return false;
+    }
+
+    /** 接口有明确结果时返回是否已上传；这个源连不上则返回 null，换下一个源。 */
+    private Boolean releaseHasAsset(String url, String fileName) {
+        HttpURLConnection c = null;
+        try {
+            Log.d(TAG, "确认安装包: " + url);
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(8000);
+            c.setInstanceFollowRedirects(true);
+            c.setRequestProperty("User-Agent", "FNTV");
+            c.setRequestProperty("Accept", "application/vnd.github+json");
+            c.connect();
+            int code = c.getResponseCode();
+            Log.d(TAG, "安装包确认响应: " + code);
+            if (code == 404) return false;
+            if (code != 200) return null;
+            java.io.BufferedReader r = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(c.getInputStream(), "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line);
+            r.close();
+            org.json.JSONObject json = new org.json.JSONObject(sb.toString());
+            org.json.JSONArray assets = json.optJSONArray("assets");
+            if (assets == null) return false;
+            for (int i = 0; i < assets.length(); i++) {
+                org.json.JSONObject asset = assets.optJSONObject(i);
+                if (asset == null || !fileName.equals(asset.optString("name"))) continue;
+                String state = asset.optString("state", "");
+                return state.isEmpty() || "uploaded".equals(state);
+            }
+            return false;
+        } catch (Exception e) {
+            Log.w(TAG, "确认安装包失败: " + e.getMessage());
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private static String decodeUrl(String value) {
+        try {
+            return java.net.URLDecoder.decode(value, "UTF-8");
+        } catch (Exception e) {
+            return value;
+        }
+    }
+
+    private static String encodePath(String value) {
+        try {
+            return java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20");
+        } catch (Exception e) {
+            return value;
+        }
     }
 
     private boolean canPrompt() {

@@ -516,8 +516,7 @@ public class HomeActivity extends AppCompatActivity {
     private void noteListRefreshDone(boolean ok) {
         if (!pageRefreshRequested) return;
         pageRefreshRequested = false;
-        if (ok) AppToast.showCenter(this, "已刷新");
-        else AppToast.show(this, "刷新失败");
+        AppToast.show(this, ok ? "已刷新" : "刷新失败");
         finishHomeSwipe();
     }
 
@@ -670,7 +669,7 @@ public class HomeActivity extends AppCompatActivity {
                     loadAllPreviews();
                     if (homeRefreshRequested) {
                         homeRefreshRequested = false;
-                        AppToast.showCenter(HomeActivity.this, "已刷新");
+                        AppToast.show(HomeActivity.this, "已刷新");
                     }
                     finishHomeSwipe();
                 } else {
