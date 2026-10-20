@@ -8,9 +8,11 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import java.io.File;
@@ -99,7 +101,9 @@ public class UpdateManager {
         if (btnCheckUpdate == null) return;
         btnCheckUpdate.setEnabled(true);
         btnCheckUpdate.setText("检查更新");
-        if (!stayPut) btnCheckUpdate.requestFocus();
+        if (!stayPut && (updateDialog == null || !updateDialog.isShowing())) {
+            btnCheckUpdate.requestFocus();
+        }
     }
 
     // ========== 检查更新 ==========
@@ -286,13 +290,15 @@ public class UpdateManager {
         LinearLayout.LayoutParams laterLp = new LinearLayout.LayoutParams(0, 44 * dp, 1f);
         laterLp.rightMargin = 8 * dp;
         later.setLayoutParams(laterLp);
+        final boolean[] downloadFailed = {false};
         later.setOnClickListener(v -> {
-            if (forceUpdate) activity.finishAffinity();
-            else dialog.dismiss();
+            if (downloadFailed[0] || !forceUpdate) dialog.dismiss();
+            else activity.finishAffinity();
         });
 
+        final String updateLabel = isTestInstall ? "测试安装器" : "立即更新";
         Button update = new Button(activity);
-        update.setText(isTestInstall ? "测试安装器" : "立即更新");
+        update.setText(updateLabel);
         update.setAllCaps(false);
         update.setTextSize(15);
         update.setTextColor(activity.getResources().getColor(R.color.text_white));
@@ -302,16 +308,83 @@ public class UpdateManager {
         LinearLayout.LayoutParams updateLp = new LinearLayout.LayoutParams(0, 44 * dp, 1f);
         updateLp.leftMargin = 8 * dp;
         update.setLayoutParams(updateLp);
+
+        LinearLayout progressBox = new LinearLayout(activity);
+        progressBox.setOrientation(LinearLayout.VERTICAL);
+        progressBox.setVisibility(View.GONE);
+        LinearLayout.LayoutParams progressLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        progressLp.topMargin = 14 * dp;
+        progressBox.setLayoutParams(progressLp);
+
+        ProgressBar bar = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setProgress(0);
+        bar.setProgressDrawable(activity.getResources().getDrawable(R.drawable.seeker_progress));
+        bar.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 6 * dp));
+        progressBox.addView(bar);
+
+        TextView progressLabel = new TextView(activity);
+        progressLabel.setText("下载中 0%");
+        progressLabel.setTextColor(activity.getResources().getColor(R.color.text_hint));
+        progressLabel.setTextSize(12);
+        progressLabel.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        labelLp.topMargin = 6 * dp;
+        progressLabel.setLayoutParams(labelLp);
+        progressBox.addView(progressLabel);
+
+        final boolean[] downloading = {false};
         update.setOnClickListener(v -> {
+            if (downloading[0]) return;
+            downloading[0] = true;
             accepted[0] = true;
-            boolean quietDownload = quiet;
-            dialog.dismiss();
-            downloadAndInstall(apkUrl, remoteVersion, isTestInstall, quietDownload);
+            later.setEnabled(false);
+            update.setText("下载中...");
+            dialog.setCancelable(false);
+            dialog.setCanceledOnTouchOutside(false);
+            bar.setIndeterminate(false);
+            bar.setProgress(0);
+            progressLabel.setText("下载中 0%");
+            progressBox.setVisibility(View.VISIBLE);
+            downloadAndInstall(apkUrl, remoteVersion, isTestInstall, quiet, new DownloadUi() {
+                @Override public void onProgress(int percent) {
+                    if (!dialog.isShowing()) return;
+                    if (percent < 0) {
+                        bar.setIndeterminate(true);
+                        progressLabel.setText("下载中...");
+                        return;
+                    }
+                    bar.setIndeterminate(false);
+                    bar.setProgress(percent);
+                    progressLabel.setText(percent >= 100 ? "下载完成" : "下载中 " + percent + "%");
+                }
+
+                @Override public void onFinished() {
+                    if (dialog.isShowing()) dialog.dismiss();
+                }
+
+                @Override public void onFailed() {
+                    if (!dialog.isShowing()) return;
+                    downloadFailed[0] = true;
+                    downloading[0] = false;
+                    later.setEnabled(true);
+                    later.setText("取消");
+                    update.setText(updateLabel);
+                    progressBox.setVisibility(View.GONE);
+                    dialog.setCancelable(true);
+                    dialog.setCanceledOnTouchOutside(true);
+                    later.requestFocus();
+                }
+            });
         });
 
         actions.addView(later);
         actions.addView(update);
         root.addView(actions);
+        root.addView(progressBox);
         dialog.setContentView(root);
 
         if (dialog.getWindow() != null) {
@@ -327,13 +400,31 @@ public class UpdateManager {
 
     // ========== 下载 ==========
 
+    private interface DownloadUi {
+        void onProgress(int percent);
+        void onFinished();
+        void onFailed();
+    }
+
+    private void postProgress(DownloadUi ui, int percent) {
+        if (ui == null) return;
+        activity.runOnUiThread(() -> {
+            if (canPrompt()) ui.onProgress(percent);
+        });
+    }
+
+    private void postFailed(DownloadUi ui) {
+        activity.runOnUiThread(() -> {
+            if (ui != null && canPrompt()) ui.onFailed();
+        });
+    }
+
     private void downloadAndInstall(final String apkUrl, final int remoteVersion, final boolean isTestInstall,
-                                     final boolean quietDownload) {
+                                     final boolean quietDownload, final DownloadUi ui) {
         busy = true;
         quiet = quietDownload;
         if (btnCheckUpdate != null) {
             btnCheckUpdate.setText(isTestInstall ? "测试中..." : "下载中...");
-            if (!quietDownload) btnCheckUpdate.requestFocus();
         }
         new Thread(() -> {
             try {
@@ -344,6 +435,7 @@ public class UpdateManager {
                 c.connect();
                 int respCode = c.getResponseCode();
                 if (respCode != 200) {
+                    postFailed(ui);
                     activity.runOnUiThread(() -> {
                         AppToast.show(activity, "下载失败，服务器返回 " + respCode, true);
                         resetBtn();
@@ -355,13 +447,28 @@ public class UpdateManager {
                 if (!dir.exists()) dir.mkdirs();
                 final File apkFile = new File(dir, "FNTV_v" + remoteVersion + ".apk");
 
+                long total = c.getContentLength();
+                if (total <= 0) postProgress(ui, -1);
                 InputStream is = c.getInputStream();
                 FileOutputStream fos = new FileOutputStream(apkFile);
                 byte[] buf = new byte[8192];
                 int n;
-                while ((n = is.read(buf)) != -1) fos.write(buf, 0, n);
+                long read = 0;
+                int lastPercent = -1;
+                while ((n = is.read(buf)) != -1) {
+                    fos.write(buf, 0, n);
+                    read += n;
+                    if (total > 0) {
+                        int percent = (int) Math.min(99, read * 100 / total);
+                        if (percent != lastPercent) {
+                            lastPercent = percent;
+                            postProgress(ui, percent);
+                        }
+                    }
+                }
                 fos.close();
                 is.close();
+                postProgress(ui, 100);
 
                 Log.d(TAG, "下载完成: " + apkFile.getAbsolutePath() + " (" + apkFile.length() + " bytes)");
 
@@ -373,6 +480,7 @@ public class UpdateManager {
                 String headerStr = new String(header, "UTF-8");
                 Log.d(TAG, "APK 文件头: " + headerStr + " (" + bytesToHex(header) + ")");
                 if (!"PK".equals(headerStr.substring(0, 2))) {
+                    postFailed(ui);
                     activity.runOnUiThread(() -> {
                         AppToast.show(activity, "下载文件不是有效的 APK（文件头异常）", true);
                         resetBtn();
@@ -382,6 +490,7 @@ public class UpdateManager {
 
                 // 签名校验
                 if (!verifyApkSignature(apkFile)) {
+                    postFailed(ui);
                     activity.runOnUiThread(() -> {
                         AppToast.show(activity, "APK 签名校验失败，可能已被篡改", true);
                         resetBtn();
@@ -389,10 +498,14 @@ public class UpdateManager {
                     return;
                 }
 
-                activity.runOnUiThread(() -> installApk(apkFile, isTestInstall));
+                activity.runOnUiThread(() -> {
+                    if (ui != null && canPrompt()) ui.onFinished();
+                    installApk(apkFile, isTestInstall);
+                });
 
             } catch (Exception e) {
                 Log.e(TAG, "下载失败", e);
+                postFailed(ui);
                 activity.runOnUiThread(() -> {
                     AppToast.show(activity, "下载失败: " + e.getMessage(), true);
                     resetBtn();

@@ -27,18 +27,29 @@ final class AppToast {
     }
 
     static void show(Context context, CharSequence text, boolean longer) {
+        show(context, text, longer, false);
+    }
+
+    /** 显示在屏幕正中，用于「已刷新」这类短提示。 */
+    static void showCenter(Context context, CharSequence text) {
+        show(context, text, false, true);
+    }
+
+    private static void show(Context context, CharSequence text, boolean longer, boolean center) {
         if (context == null || text == null) return;
         Activity activity = activityOf(context);
         if (activity == null || activity.isFinishing()) {
-            Toast.makeText(context, text, longer ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show();
+            Toast toast = Toast.makeText(context, text, longer ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT);
+            if (center) toast.setGravity(Gravity.CENTER, 0, 0);
+            toast.show();
             return;
         }
-        Runnable post = () -> present(activity, text, longer ? 3500 : 2000);
+        Runnable post = () -> present(activity, text, longer ? 3500 : 2000, center);
         if (Looper.myLooper() == Looper.getMainLooper()) post.run();
         else HANDLER.post(post);
     }
 
-    private static void present(Activity activity, CharSequence text, int durationMs) {
+    private static void present(Activity activity, CharSequence text, int durationMs, boolean center) {
         ViewGroup decor = (ViewGroup) activity.getWindow().getDecorView();
         if (hide != null) HANDLER.removeCallbacks(hide);
         if (current != null && current.getParent() instanceof ViewGroup) {
@@ -62,8 +73,8 @@ final class AppToast {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        lp.bottomMargin = Math.round(72 * density);
+                center ? Gravity.CENTER : (Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
+        if (!center) lp.bottomMargin = Math.round(72 * density);
         lp.leftMargin = padH;
         lp.rightMargin = padH;
         decor.addView(tv, lp);
