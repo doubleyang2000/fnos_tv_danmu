@@ -58,11 +58,21 @@ public class HomeActivity extends AppCompatActivity {
     private boolean tabSwitching;
     private boolean showingEpisodes = false;
     private boolean loadingPreviews = false;
+    private int previewGeneration = 0;
     private boolean overviewLoading = false;
     private boolean homeRefreshRequested = false;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout homeSwipeRefresh;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout librarySwipeRefresh;
     private boolean pageRefreshRequested = false;
+    /** 当前已经画在屏幕上的内容。刷新回来若一致，就不再拆掉重画。 */
+    private String shownContinueKey;
+    private final Map<String, String> shownPreviewKeys = new HashMap<>();
+    private String shownLivePreviewKey;
+    private String shownOverviewLibsKey;
+    private String shownBrowseKey;
+    private String shownLibListKey;
+    private String shownLiveGridKey;
+    private String shownSearchKey;
     private boolean continueLoading = false;
     private boolean continueRefreshPending = false;
     private int recordWaitTicks = 0;
@@ -499,10 +509,21 @@ public class HomeActivity extends AppCompatActivity {
         syncHomeSwipe();
     }
 
+    private void markPageRefresh() {
+        pageRefreshRequested = true;
+    }
+
     private void noteListRefreshDone(boolean ok) {
         if (!pageRefreshRequested) return;
         pageRefreshRequested = false;
         AppToast.show(this, ok ? "已刷新" : "刷新失败");
+        finishHomeSwipe();
+    }
+
+    /** 人已经离开这一页时，收起刷新，不再改当前画面。 */
+    private void abandonPageRefresh() {
+        if (!pageRefreshRequested) return;
+        pageRefreshRequested = false;
         finishHomeSwipe();
     }
 
@@ -514,26 +535,26 @@ public class HomeActivity extends AppCompatActivity {
         }
         if (currentTab == 1) {
             if (isSearching && etSearch != null && etSearch.getText().length() > 0) {
-                pageRefreshRequested = true;
+                markPageRefresh();
                 performSearch(etSearch.getText().toString().trim());
                 return;
             }
             if (savedBrowseGuid != null) {
-                pageRefreshRequested = true;
+                markPageRefresh();
                 reFetchLibraryItems();
                 return;
             }
-            pageRefreshRequested = true;
+            markPageRefresh();
             loadMediaLibraries();
             return;
         }
         if (!showingOverview && savedBrowseGuid != null) {
-            pageRefreshRequested = true;
+            markPageRefresh();
             reFetchLibraryItems();
             return;
         }
         if (!showingOverview && savedLiveChannelTitle != null) {
-            pageRefreshRequested = true;
+            markPageRefresh();
             browseLiveChannels();
             return;
         }
@@ -586,11 +607,15 @@ public class HomeActivity extends AppCompatActivity {
         if (overviewLoading) return;
         if (apiManager.getApi() == null) return;
         overviewLoading = true;
+        final boolean quiet = homeRefreshRequested && overviewBuilt && showingOverview
+                && moviesContainer != null && moviesContainer.getChildCount() > 0;
         Log.d("Overview", "loadOverview start  t=" + (System.currentTimeMillis() - t0) + "ms");
         showingOverview = true;
-        overviewBuilt = false;
         loadingPreviews = false;
-        tvMoviesLoading.setVisibility(View.VISIBLE);
+        if (!quiet) {
+            overviewBuilt = false;
+            tvMoviesLoading.setVisibility(View.VISIBLE);
+        }
         // 不依赖媒体库名单，和名单并行请求，回来时能直接画上
         loadContinueWatching();
         loadLiveChannels();
@@ -621,12 +646,26 @@ public class HomeActivity extends AppCompatActivity {
                 }
                 if (response.isSuccessful() && response.body() != null && response.body().code == 0
                         && response.body().data != null && !response.body().data.isEmpty()) {
-                    mediaLibraries.clear();
-                    for (MediaDbItem lib : response.body().data) {
-                        if (!lib.refreshDisabled) mediaLibraries.add(lib);
+                    if (savedDetailItem != null || !showingOverview) {
+                        if (homeRefreshRequested) {
+                            homeRefreshRequested = false;
+                            finishHomeSwipe();
+                        }
+                        return;
                     }
+                    List<MediaDbItem> next = new ArrayList<>();
+                    for (MediaDbItem lib : response.body().data) {
+                        if (!lib.refreshDisabled) next.add(lib);
+                    }
+                    String stamp = libsStamp(next);
+                    boolean same = quiet && stamp.equals(shownOverviewLibsKey);
+                    mediaLibraries.clear();
+                    mediaLibraries.addAll(next);
                     Log.d("Overview", "loaded " + mediaLibraries.size() + " libraries");
-                    showOverview();
+                    if (!same) {
+                        shownOverviewLibsKey = stamp;
+                        showOverview();
+                    }
                     loadAllPreviews();
                     if (homeRefreshRequested) {
                         homeRefreshRequested = false;
@@ -667,6 +706,10 @@ public class HomeActivity extends AppCompatActivity {
         showingEpisodes = false;
         parkFocusOutside(moviesContainer);
         moviesContainer.removeAllViews();
+        shownContinueKey = null;
+        shownPreviewKeys.clear();
+        shownLivePreviewKey = null;
+        shownOverviewLibsKey = libsStamp(mediaLibraries);
         showingOverview = true;
         overviewBuilt = true;
         homeEntryFocused = false;
@@ -747,6 +790,7 @@ public class HomeActivity extends AppCompatActivity {
     private void loadAllPreviews() {
         if (loadingPreviews) return;
         loadingPreviews = true;
+        final int generation = ++previewGeneration;
         for (final MediaDbItem lib : mediaLibraries) {
             final String guid = lib.guid;
             apiManager.getApi().getItemList(ItemListRequest.browseLibrary(guid))
@@ -754,6 +798,7 @@ public class HomeActivity extends AppCompatActivity {
                 @Override
                 public void onResponse(Call<ApiResponse<ItemListResponse>> call,
                                        Response<ApiResponse<ItemListResponse>> response) {
+                    if (generation != previewGeneration || !showingOverview) return;
                     if (!response.isSuccessful() || response.body() == null || response.body().code != 0
                             || response.body().data == null || response.body().data.list == null
                             || response.body().data.list.isEmpty()) {
@@ -763,50 +808,65 @@ public class HomeActivity extends AppCompatActivity {
                     // 取前6个填到预览容器
                     List<PlayListItem> items = response.body().data.list;
                     if (items.size() > 20) items = items.subList(0, 20);
-                    fillPreview(guid, items);
                     updateLibShortcutPoster(guid, items.get(0));
+                    fillPreview(guid, items);
                     applyPendingHomeScroll();
                 }
                 @Override public void onFailure(Call<ApiResponse<ItemListResponse>> call, Throwable t) {
+                    if (generation != previewGeneration || !showingOverview) return;
                     clearPreview(guid);
                 }
             });
         }
     }
 
-    /** 没有片子时去掉「加载中...」，栏目标题和下面的间隔一并移除。 */
+    /** 没有片子时收起这一栏。留下视图，下次有内容再展开，不用整页重画。 */
     private void clearPreview(String libGuid) {
-        if (moviesContainer == null) return;
+        if (moviesContainer == null || !setPreviewBlockVisible(libGuid, false)) return;
+        shownPreviewKeys.remove(libGuid);
+        for (int i = 0; i < moviesContainer.getChildCount(); i++) {
+            View v = moviesContainer.getChildAt(i);
+            if (v instanceof LinearLayout && ("preview_" + libGuid).equals(v.getTag())) {
+                ((LinearLayout) v).removeAllViews();
+                break;
+            }
+        }
+        if (showingOverview) wireOverviewFocus();
+        applyPendingHomeScroll();
+    }
+
+    /** 预览、它上面的标题、下面的间隔一起显示或收起。已经是这个状态就返回 false。 */
+    private boolean setPreviewBlockVisible(String libGuid, boolean visible) {
+        int vis = visible ? View.VISIBLE : View.GONE;
         for (int i = 0; i < moviesContainer.getChildCount(); i++) {
             View v = moviesContainer.getChildAt(i);
             if (!(v instanceof LinearLayout) || !("preview_" + libGuid).equals(v.getTag())) continue;
-            int start = i;
-            int end = i;
+            if (v.getVisibility() == vis) return false;
             if (i > 0 && "lib_header".equals(moviesContainer.getChildAt(i - 1).getTag())) {
-                start = i - 1;
+                moviesContainer.getChildAt(i - 1).setVisibility(vis);
             }
+            v.setVisibility(vis);
             if (i + 1 < moviesContainer.getChildCount()) {
                 View next = moviesContainer.getChildAt(i + 1);
-                if (next.getTag() == null && !(next instanceof LinearLayout)) {
-                    end = i + 1;
-                }
+                if (next.getTag() == null && !(next instanceof LinearLayout)) next.setVisibility(vis);
             }
-            for (int r = end; r >= start; r--) {
-                moviesContainer.removeViewAt(r);
-            }
-            if (showingOverview) wireOverviewFocus();
-            applyPendingHomeScroll();
-            return;
+            return true;
         }
+        return false;
     }
 
-    /** 填充预览卡片（先清空再填充，防止重复） */
+    /** 填充预览卡片。和屏幕上一致就不动，避免海报重新加载时闪一下。 */
 
     private void fillPreview(String libGuid, List<PlayListItem> items) {
         for (int i = 0; i < moviesContainer.getChildCount(); i++) {
             View v = moviesContainer.getChildAt(i);
             if (v instanceof LinearLayout && ("preview_" + libGuid).equals(v.getTag())) {
                 LinearLayout box = (LinearLayout) v;
+                String stamp = listStamp(items);
+                if (stamp.equals(shownPreviewKeys.get(libGuid)) && box.getChildCount() > 0
+                        && box.getVisibility() == View.VISIBLE) break;
+                shownPreviewKeys.put(libGuid, stamp);
+                setPreviewBlockVisible(libGuid, true);
                 box.removeAllViews();
                 populateGrid(box, items);
                 wireOverviewFocus();
@@ -1001,6 +1061,9 @@ public class HomeActivity extends AppCompatActivity {
             hideContinueWatching(cont);
             return;
         }
+        String stamp = listStamp(items);
+        if (stamp.equals(shownContinueKey) && cont.getChildCount() > 0) return;
+        shownContinueKey = stamp;
         cont.removeAllViews();
         cont.setVisibility(View.VISIBLE);
 
@@ -1142,6 +1205,8 @@ public class HomeActivity extends AppCompatActivity {
 
     private void hideContinueWatching(LinearLayout box) {
         if (box == null) return;
+        shownContinueKey = null;
+        if (box.getChildCount() == 0 && box.getVisibility() == View.GONE) return;
         box.removeAllViews();
         box.setVisibility(View.GONE);
     }
@@ -1390,6 +1455,9 @@ public class HomeActivity extends AppCompatActivity {
     private void browseItemsInContainer(String ancestorGuid, String title,
                                         LinearLayout container, TextView loadingView) {
         Log.d("Overview", "browseItems: guid=" + ancestorGuid + " title=" + title);
+        final boolean samePage = ancestorGuid != null && ancestorGuid.equals(savedBrowseGuid)
+                && container != null && container.getChildCount() > 0 && savedDetailItem == null
+                && (container != moviesContainer || !showingOverview);
         savedDetailItem = null; savedDetailInfo = null;
         showingEpisodes = false;
         setDetailChrome(false);
@@ -1404,7 +1472,6 @@ public class HomeActivity extends AppCompatActivity {
             showingOverview = false;
             syncHomeSwipe();
         }
-        parkFocusOutside(container);
 
         // 存储当前浏览上下文，排序变化时用于重新加载
         currentBrowseGuid = ancestorGuid;
@@ -1412,13 +1479,16 @@ public class HomeActivity extends AppCompatActivity {
         currentBrowseContainer = container;
         currentBrowseLoading = loadingView;
 
-        container.removeAllViews();
-        loadingView.setVisibility(View.VISIBLE);
+        if (!samePage) {
+            parkFocusOutside(container);
+            container.removeAllViews();
+            loadingView.setVisibility(View.VISIBLE);
+        }
 
         int sortIdx = libSortColumnIndex;
         if (sortIdx < 0 || sortIdx >= LIB_SORT_COLUMNS.length) sortIdx = 0;
-        String sortColumn = LIB_SORT_COLUMNS[sortIdx];
-        String sortType = libSortOrderIndex == 0 ? "ASC" : "DESC";
+        final String sortColumn = LIB_SORT_COLUMNS[sortIdx];
+        final String sortType = libSortOrderIndex == 0 ? "ASC" : "DESC";
         ItemListRequest request = new ItemListRequest(ancestorGuid,
                 Arrays.asList("Movie", "TV", "Directory", "Video"),
                 true, sortColumn, sortType, 50);
@@ -1427,37 +1497,70 @@ public class HomeActivity extends AppCompatActivity {
             @Override
             public void onResponse(Call<ApiResponse<ItemListResponse>> call,
                                    Response<ApiResponse<ItemListResponse>> response) {
+                if (!stillBrowsing(ancestorGuid, container)) {
+                    abandonPageRefresh();
+                    return;
+                }
                 loadingView.setVisibility(View.GONE);
                 Log.d("Overview", "browseItems response code=" + response.code());
-
-                if (response.isSuccessful() && response.body() != null && response.body().code == 0
-                        && response.body().data != null && response.body().data.list != null
-                        && !response.body().data.list.isEmpty()) {
-                    List<PlayListItem> list = response.body().data.list;
+                boolean ok = response.isSuccessful() && response.body() != null && response.body().code == 0;
+                if (!ok) {
+                    if (!samePage) showBrowseEmpty(container);
+                    noteListRefreshDone(false);
+                    return;
+                }
+                List<PlayListItem> list = response.body().data != null ? response.body().data.list : null;
+                int total = response.body().data != null ? response.body().data.total : 0;
+                String stamp = ancestorGuid + "|" + sortColumn + "|" + sortType + "|" + total + "|" + listStamp(list);
+                if (samePage && stamp.equals(shownBrowseKey)) {
+                    noteListRefreshDone(true);
+                    return;
+                }
+                if (samePage) {
+                    parkFocusOutside(container);
+                    container.removeAllViews();
+                }
+                shownBrowseKey = stamp;
+                if (list != null && !list.isEmpty()) {
                     savedBrowseList = list;
-                    int total = response.body().data.total;
                     Log.d("Overview", "browseItems: got " + list.size() + " items, total=" + total);
                     showLibraryBrowseHeader(container, title);
                     renderLibraryGrid(container, list, total);
                 } else {
-                    TextView e = new TextView(HomeActivity.this);
-                    e.setLayoutParams(new LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT, 120));
-                    e.setGravity(Gravity.CENTER);
-                    e.setText("暂无内容");
-                    e.setTextColor(color(R.color.text_hint));
-                    e.setTextSize(14);
-                    container.addView(e);
+                    savedBrowseList = list != null ? list : new ArrayList<PlayListItem>();
+                    showBrowseEmpty(container);
                 }
-                noteListRefreshDone(response.isSuccessful() && response.body() != null
-                        && response.body().code == 0);
+                noteListRefreshDone(true);
             }
             @Override
             public void onFailure(Call<ApiResponse<ItemListResponse>> call, Throwable t) {
+                if (!stillBrowsing(ancestorGuid, container)) {
+                    abandonPageRefresh();
+                    return;
+                }
                 loadingView.setVisibility(View.GONE);
                 noteListRefreshDone(false);
             }
         });
+    }
+
+    private boolean stillBrowsing(String guid, LinearLayout container) {
+        if (guid == null || !guid.equals(savedBrowseGuid) || container != currentBrowseContainer) return false;
+        if (savedDetailItem != null) return false;
+        if (container == moviesContainer && showingOverview) return false;
+        if (container == libraryContainer && isSearching) return false;
+        return true;
+    }
+
+    private void showBrowseEmpty(LinearLayout container) {
+        TextView e = new TextView(this);
+        e.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 120));
+        e.setGravity(Gravity.CENTER);
+        e.setText("暂无内容");
+        e.setTextColor(color(R.color.text_hint));
+        e.setTextSize(14);
+        container.addView(e);
     }
 
     /** 从缓存数据重绘浏览网格（横竖屏切换时调用） */
@@ -3508,12 +3611,16 @@ public class HomeActivity extends AppCompatActivity {
 
     private void loadMediaLibraries() {
         isSearching = false;
+        final boolean samePage = pageRefreshRequested && libraryContainer != null
+                && libraryContainer.getChildCount() > 0 && savedBrowseGuid == null;
         View browseBar = findViewById(R.id.libBrowseBar);
         if (browseBar != null) browseBar.setVisibility(View.GONE);
         if (etSearch != null) etSearch.setVisibility(View.VISIBLE);
         if (tvLibraryPageTitle != null) tvLibraryPageTitle.setVisibility(View.VISIBLE);
-        clearContainer(libraryContainer, tvLibraryLoading, tvLibraryEmpty);
-        tvLibraryLoading.setVisibility(View.VISIBLE);
+        if (!samePage) {
+            clearContainer(libraryContainer, tvLibraryLoading, tvLibraryEmpty);
+            tvLibraryLoading.setVisibility(View.VISIBLE);
+        }
 
         final int[] retryCount = {1};
         apiManager.getApi().getMediaDbList().enqueue(new Callback<ApiResponse<List<MediaDbItem>>>() {
@@ -3527,31 +3634,49 @@ public class HomeActivity extends AppCompatActivity {
                     call.clone().enqueue(this);
                     return;
                 }
+                if (savedBrowseGuid != null || isSearching || currentTab != 1) {
+                    abandonPageRefresh();
+                    return;
+                }
                 tvLibraryLoading.setVisibility(View.GONE);
                 if (SessionGuard.isAuthFailure(response.code(), apiCode)) {
+                    abandonPageRefresh();
                     SessionGuard.expire();
                     return;
                 }
                 if (response.isSuccessful() && response.body() != null && response.body().code == 0
                         && response.body().data != null && !response.body().data.isEmpty()) {
-                    mediaLibraries.clear();
                     List<MediaDbItem> filteredLibs = new ArrayList<>();
                     for (MediaDbItem lib : response.body().data) {
                         if (!lib.refreshDisabled) filteredLibs.add(lib);
                     }
+                    String stamp = libsStamp(filteredLibs);
+                    mediaLibraries.clear();
                     mediaLibraries.addAll(filteredLibs);
+                    if (samePage && stamp.equals(shownLibListKey)) {
+                        loadLibraryCounts(filteredLibs);
+                        noteListRefreshDone(true);
+                        return;
+                    }
+                    shownLibListKey = stamp;
                     populateLibGrid(libraryContainer, filteredLibs);
                     noteListRefreshDone(true);
                     return;
                 }
-                tvLibraryEmpty.setVisibility(View.VISIBLE);
+                if (!samePage) tvLibraryEmpty.setVisibility(View.VISIBLE);
                 noteListRefreshDone(false);
             }
             @Override
             public void onFailure(Call<ApiResponse<List<MediaDbItem>>> call, Throwable t) {
+                if (savedBrowseGuid != null || isSearching || currentTab != 1) {
+                    abandonPageRefresh();
+                    return;
+                }
                 tvLibraryLoading.setVisibility(View.GONE);
-                tvLibraryEmpty.setText("加载失败: " + t.getMessage());
-                tvLibraryEmpty.setVisibility(View.VISIBLE);
+                if (!samePage) {
+                    tvLibraryEmpty.setText("加载失败: " + t.getMessage());
+                    tvLibraryEmpty.setVisibility(View.VISIBLE);
+                }
                 noteListRefreshDone(false);
             }
         });
@@ -3676,34 +3801,68 @@ public class HomeActivity extends AppCompatActivity {
             clearSearch();
             return;
         }
+        final boolean samePage = pageRefreshRequested && isSearching
+                && libraryContainer != null && libraryContainer.getChildCount() > 0;
         isSearching = true;
-        libraryContainer.removeAllViews();
-        tvLibraryLoading.setVisibility(View.VISIBLE);
-        tvLibraryLoading.setText("搜索中...");
+        if (!samePage) {
+            libraryContainer.removeAllViews();
+            tvLibraryLoading.setVisibility(View.VISIBLE);
+            tvLibraryLoading.setText("搜索中...");
+        }
 
         SearchHelper.search(apiManager, query, new SearchHelper.SearchCallback() {
             @Override
             public void onResults(List<PlayListItem> results) {
+                if (!stillSearching(query)) {
+                    abandonPageRefresh();
+                    return;
+                }
                 tvLibraryLoading.setVisibility(View.GONE);
+                String stamp = query + "|" + listStamp(results);
+                if (samePage && stamp.equals(shownSearchKey)) {
+                    noteListRefreshDone(true);
+                    return;
+                }
+                shownSearchKey = stamp;
                 showSearchResults(results);
                 noteListRefreshDone(true);
             }
 
             @Override
             public void onEmpty() {
+                if (!stillSearching(query)) {
+                    abandonPageRefresh();
+                    return;
+                }
                 tvLibraryLoading.setVisibility(View.GONE);
+                String stamp = query + "|empty";
+                if (samePage && stamp.equals(shownSearchKey)) {
+                    noteListRefreshDone(true);
+                    return;
+                }
+                shownSearchKey = stamp;
                 showSearchEmpty();
                 noteListRefreshDone(true);
             }
 
             @Override
             public void onError(String msg) {
+                if (!stillSearching(query)) {
+                    abandonPageRefresh();
+                    return;
+                }
                 tvLibraryLoading.setVisibility(View.GONE);
-                tvLibraryEmpty.setText(msg);
-                tvLibraryEmpty.setVisibility(View.VISIBLE);
+                if (!samePage) {
+                    tvLibraryEmpty.setText(msg);
+                    tvLibraryEmpty.setVisibility(View.VISIBLE);
+                }
                 noteListRefreshDone(false);
             }
         });
+    }
+
+    private boolean stillSearching(String query) {
+        return isSearching && etSearch != null && query.equals(etSearch.getText().toString().trim());
     }
 
     private void showSearchResults(List<PlayListItem> results) {
@@ -3938,7 +4097,11 @@ public class HomeActivity extends AppCompatActivity {
     private void applyLibraryCount(String guid, int total) {
         if (isFinishing() || libraryContainer == null || guid == null) return;
         View v = libraryContainer.findViewWithTag(libCountTag(guid));
-        if (v instanceof TextView) ((TextView) v).setText(String.valueOf(total));
+        if (v instanceof TextView) {
+            TextView count = (TextView) v;
+            String text = String.valueOf(total);
+            if (!text.contentEquals(count.getText())) count.setText(text);
+        }
     }
 
 
@@ -4223,6 +4386,56 @@ public class HomeActivity extends AppCompatActivity {
     // ==================== 工具 ====================
 
 
+    private static String nz(String s) {
+        return s == null ? "" : s;
+    }
+
+    /** 列表项里会影响卡片显示的字段。顺序也算，用来判断刷新后要不要重画。 */
+    private static String itemStamp(PlayListItem item) {
+        if (item == null) return "";
+        String resolution = "";
+        if (item.mediaStream != null && item.mediaStream.resolutions != null
+                && !item.mediaStream.resolutions.isEmpty() && item.mediaStream.resolutions.get(0) != null) {
+            resolution = item.mediaStream.resolutions.get(0);
+        }
+        return nz(item.guid) + '\u0001' + nz(item.title) + '\u0001' + nz(item.poster)
+                + '\u0001' + nz(item.type) + '\u0001' + item.ts + '\u0001' + item.duration
+                + '\u0001' + item.watched + '\u0001' + item.episodeNumber + '\u0001' + item.seasonNumber
+                + '\u0001' + nz(item.voteAverage) + '\u0001' + item.isFavorite
+                + '\u0001' + item.localNumberOfSeasons + '\u0001' + item.localNumberOfEpisodes
+                + '\u0001' + item.numberOfSeasons + '\u0001' + item.numberOfEpisodes
+                + '\u0001' + nz(item.tvTitle) + '\u0001' + nz(item.parentGuid)
+                + '\u0001' + nz(item.airDate) + '\u0001' + resolution;
+    }
+
+    private static String listStamp(List<PlayListItem> list) {
+        if (list == null || list.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (PlayListItem item : list) sb.append(itemStamp(item)).append('\n');
+        return sb.toString();
+    }
+
+    private static String libsStamp(List<MediaDbItem> libs) {
+        if (libs == null || libs.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (MediaDbItem lib : libs) {
+            if (lib == null) continue;
+            sb.append(nz(lib.guid)).append('\u0001')
+                    .append(nz(lib.title)).append('\u0001')
+                    .append(nz(lib.getFirstPoster())).append('\u0001')
+                    .append(nz(lib.category)).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static boolean hasTaggedChild(ViewGroup parent, String tag) {
+        if (parent == null || tag == null) return false;
+        for (int i = 0; i < parent.getChildCount(); i++) {
+            if (tag.equals(parent.getChildAt(i).getTag())) return true;
+        }
+        return false;
+    }
+
     private void clearContainer(LinearLayout c, TextView l, TextView e) {
         parkFocusOutside(c);
         l.setVisibility(View.GONE);
@@ -4355,8 +4568,11 @@ public class HomeActivity extends AppCompatActivity {
         }
     }
 
-    /** 填充直播频道预览区（先移除旧的再添加） */
+    /** 填充直播频道预览区。内容和上次一样就留着，避免整行闪一下。 */
     private void fillLiveChannelPreview(List<PlayListItem> items, int total) {
+        String stamp = total + "|" + listStamp(items);
+        if (stamp.equals(shownLivePreviewKey) && hasTaggedChild(moviesContainer, "live_channel")) return;
+        shownLivePreviewKey = stamp;
         // 移除已有的直播频道区域
         for (int i = moviesContainer.getChildCount() - 1; i >= 0; i--) {
             View v = moviesContainer.getChildAt(i);
@@ -4461,46 +4677,69 @@ public class HomeActivity extends AppCompatActivity {
 
     /** 直播频道查看全部 */
     private void browseLiveChannels() {
+        final boolean samePage = "直播频道".equals(savedLiveChannelTitle)
+                && moviesContainer != null && moviesContainer.getChildCount() > 0
+                && !showingOverview && savedDetailItem == null;
         savedDetailItem = null;
         savedDetailInfo = null;
         showingEpisodes = false;
         showingOverview = false;
         syncHomeSwipe();
         savedLiveChannelTitle = "直播频道";
-        moviesContainer.removeAllViews();
-        tvMoviesLoading.setVisibility(View.VISIBLE);
-        tvMoviesLoading.setText("加载直播频道...");
+        if (!samePage) {
+            moviesContainer.removeAllViews();
+            tvMoviesLoading.setVisibility(View.VISIBLE);
+            tvMoviesLoading.setText("加载直播频道...");
+        }
 
         apiManager.getApi().getItemList(ItemListRequest.browseLiveChannels()).enqueue(new Callback<ApiResponse<ItemListResponse>>() {
             @Override
             public void onResponse(Call<ApiResponse<ItemListResponse>> call,
                                    Response<ApiResponse<ItemListResponse>> response) {
+                if (!"直播频道".equals(savedLiveChannelTitle) || showingOverview || savedDetailItem != null) {
+                    abandonPageRefresh();
+                    return;
+                }
                 tvMoviesLoading.setVisibility(View.GONE);
                 if (!response.isSuccessful() || response.body() == null || response.body().code != 0
                         || response.body().data == null || response.body().data.list == null
                         || response.body().data.list.isEmpty()) {
-                    TextView e = new TextView(HomeActivity.this);
-                    e.setLayoutParams(new LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT, 120));
-                    e.setGravity(Gravity.CENTER);
-                    e.setText("暂无直播频道");
-                    e.setTextColor(color(R.color.text_hint));
-                    e.setTextSize(14);
-                    moviesContainer.addView(e);
-                    noteListRefreshDone(true);
+                    if (!samePage) {
+                        TextView e = new TextView(HomeActivity.this);
+                        e.setLayoutParams(new LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, 120));
+                        e.setGravity(Gravity.CENTER);
+                        e.setText("暂无直播频道");
+                        e.setTextColor(color(R.color.text_hint));
+                        e.setTextSize(14);
+                        moviesContainer.addView(e);
+                    }
+                    noteListRefreshDone(response.isSuccessful() && response.body() != null
+                            && response.body().code == 0);
                     return;
                 }
                 List<PlayListItem> list = response.body().data.list;
                 int total = response.body().data.total;
+                String stamp = total + "|" + listStamp(list);
+                if (samePage && stamp.equals(shownLiveGridKey)) {
+                    noteListRefreshDone(true);
+                    return;
+                }
                 Log.d("LiveChannel", "直播频道查看全部: total=" + total + " items=" + list.size()
                         + " resp=" + new com.google.gson.Gson().toJson(response.body()));
+                if (samePage) moviesContainer.removeAllViews();
+                shownLiveGridKey = stamp;
                 renderLiveChannelGrid(list, total);
                 noteListRefreshDone(true);
             }
             @Override
             public void onFailure(Call<ApiResponse<ItemListResponse>> call, Throwable t) {
+                if (!"直播频道".equals(savedLiveChannelTitle) || showingOverview || savedDetailItem != null) {
+                    abandonPageRefresh();
+                    return;
+                }
                 tvMoviesLoading.setVisibility(View.GONE);
-                AppToast.show(HomeActivity.this, "加载直播频道失败");
+                if (!samePage) AppToast.show(HomeActivity.this, "加载直播频道失败");
                 noteListRefreshDone(false);
             }
         });
