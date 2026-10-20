@@ -12,6 +12,7 @@ public class HomeScrollView extends ScrollView {
     private float startX;
     private float startY;
     private boolean horizontal;
+    private boolean holdScroll;
 
     public HomeScrollView(Context context) {
         this(context, null);
@@ -20,6 +21,24 @@ public class HomeScrollView extends ScrollView {
     public HomeScrollView(Context context, AttributeSet attrs) {
         super(context, attrs);
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+    }
+
+    @Override
+    public boolean requestChildRectangleOnScreen(android.view.View child, android.graphics.Rect rectangle,
+                                                 boolean immediate) {
+        if (holdScroll) return false;
+        return super.requestChildRectangleOnScreen(child, rectangle, immediate);
+    }
+
+    @Override
+    public void requestChildFocus(android.view.View child, android.view.View focused) {
+        if (holdScroll) return;
+        super.requestChildFocus(child, focused);
+    }
+
+    /** 恢复滚动位置时，焦点不要再把列表拽走。 */
+    public void setHoldScroll(boolean hold) {
+        holdScroll = hold;
     }
 
     @Override

@@ -123,6 +123,9 @@ public class HomeActivity extends AppCompatActivity {
     /** 离开首页时，滚动位置落在第几个区块、以及区块顶部之上的偏移。-1 表示不用恢复。 */
     private int pendingHomeAnchor = -1;
     private int pendingHomeAnchorOffset;
+    /** 从首页进媒体库时摘下的概览。返回时原样放回，避免重画导致滚动对不上。 */
+    private ParkedPage homeOverviewPark;
+    private android.view.ViewTreeObserver.OnPreDrawListener homeScrollPin;
     private String lastFocusSectionTag;
     private int lastFocusIndexInSection;
     private boolean holdRememberedFocus;
@@ -589,7 +592,14 @@ public class HomeActivity extends AppCompatActivity {
         detailOpenedSeason = null;
         detailSeasons = null;
         if (mediaLibraries.isEmpty()) {
+            homeOverviewPark = null;
             loadOverview();
+            return;
+        }
+        if (reattachHomeOverview()) {
+            loadAllPreviews();
+            refreshContinueAfterPlayback();
+            loadLiveChannels();
             return;
         }
         loadingPreviews = false;
@@ -705,6 +715,7 @@ public class HomeActivity extends AppCompatActivity {
         savedLiveChannelTitle = null;
         showingEpisodes = false;
         parkFocusOutside(moviesContainer);
+        homeOverviewPark = null;
         moviesContainer.removeAllViews();
         shownContinueKey = null;
         shownPreviewKeys.clear();
@@ -1468,7 +1479,10 @@ public class HomeActivity extends AppCompatActivity {
             if (tvLibraryPageTitle != null) tvLibraryPageTitle.setVisibility(View.GONE);
         }
         if (container == moviesContainer) {
-            captureHomeScroll();
+            if (showingOverview) {
+                captureHomeScroll();
+                homeOverviewPark = detachPage(moviesContainer, null);
+            }
             showingOverview = false;
             syncHomeSwipe();
         }
@@ -2058,8 +2072,6 @@ public class HomeActivity extends AppCompatActivity {
                     ? libraryContainer : moviesContainer;
             detailReturn = detachPage(from, item);
             if (from != moviesContainer) detailReturn.under = detachPage(moviesContainer, null);
-            pendingHomeAnchor = -1;
-            holdRememberedFocus = false;
         }
         showingOverview = false;
         showingEpisodes = false;
@@ -5271,6 +5283,33 @@ public class HomeActivity extends AppCompatActivity {
         }
     }
 
+    /** 从媒体库返回首页：放回离开前的那一屏，并在画出之前滚回原处。 */
+    private boolean reattachHomeOverview() {
+        ParkedPage page = homeOverviewPark;
+        if (page == null || page.container != moviesContainer || page.children.isEmpty()) return false;
+        if (page.width != getResources().getDisplayMetrics().widthPixels) {
+            homeOverviewPark = null;
+            return false;
+        }
+        homeOverviewPark = null;
+        savedBrowseGuid = null;
+        savedBrowseList = null;
+        savedBrowseTitle = null;
+        savedLiveChannelTitle = null;
+        setDetailChrome(false);
+        clearLibraryBrowseHeader();
+        showingOverview = true;
+        overviewBuilt = true;
+        attachPage(page);
+        syncHomeSwipe();
+        wireOverviewFocus();
+        if (isTelevision() && page.scrollY > 0) {
+            View restore = restoreInRememberedSection();
+            if (isUsableFocus(restore)) restore.requestFocus();
+        }
+        return true;
+    }
+
     private void attachPage(ParkedPage page) {
         if (page == null || page.container == null) return;
         page.container.removeAllViews();
@@ -5284,13 +5323,91 @@ public class HomeActivity extends AppCompatActivity {
     }
 
     private void restoreScroll(LinearLayout container, int scrollY) {
-        if (scrollY < 0) return;
+        if (container == null || scrollY <= 0) return;
         ScrollView scroller = verticalScroller(container);
         if (scroller == null) return;
-        scroller.post(() -> {
-            scroller.scrollTo(0, scrollY);
-            scroller.post(() -> scroller.scrollTo(0, scrollY));
+        holdScroller(scroller, true);
+        final int[] tries = {0};
+        pinScroll(scroller, () -> {
+            tries[0]++;
+            if (scroller.getChildCount() == 0 || scroller.getHeight() == 0) return false;
+            int max = maxScroll(scroller);
+            if (scrollY > max && tries[0] < 3) return false;
+            int dest = Math.min(scrollY, max);
+            scroller.scrollTo(0, dest);
+            return scroller.getScrollY() == dest;
         });
+    }
+
+    private void applyPendingHomeScroll() {
+        if (pendingHomeAnchor < 0 || !showingOverview || moviesContainer == null) return;
+        ScrollView scroller = moviesScroller();
+        if (scroller == null) return;
+        final int index = pendingHomeAnchor;
+        final int offset = pendingHomeAnchorOffset;
+        holdScroller(scroller, true);
+        pinScroll(scroller, () -> {
+            if (!showingOverview || pendingHomeAnchor != index || moviesContainer.getChildCount() == 0) {
+                return true;
+            }
+            View anchor = moviesContainer.getChildAt(Math.min(index, moviesContainer.getChildCount() - 1));
+            int dest = Math.max(0, anchor.getTop() + offset);
+            int clamped = Math.min(dest, maxScroll(scroller));
+            scroller.scrollTo(0, clamped);
+            boolean placed = anchor.getHeight() > 0 && scroller.getScrollY() == clamped
+                    && (clamped == dest || clamped == maxScroll(scroller));
+            if (!placed) return false;
+            initialFocusPlaced = true;
+            homeEntryFocused = true;
+            if (isTelevision()) {
+                View restore = restoreInRememberedSection();
+                if (isUsableFocus(restore) && !restore.isFocused()) restore.requestFocus();
+            }
+            return true;
+        });
+    }
+
+    /** 在真正画出这一帧之前把滚动放好，避免先闪到顶部。 */
+    private void pinScroll(ScrollView scroller, java.util.concurrent.Callable<Boolean> place) {
+        android.view.ViewTreeObserver obs = scroller.getViewTreeObserver();
+        if (homeScrollPin != null && obs.isAlive()) obs.removeOnPreDrawListener(homeScrollPin);
+        homeScrollPin = new android.view.ViewTreeObserver.OnPreDrawListener() {
+            int tries;
+
+            @Override
+            public boolean onPreDraw() {
+                boolean done = false;
+                try {
+                    done = Boolean.TRUE.equals(place.call());
+                } catch (Exception ignored) {
+                    done = true;
+                }
+                if (!done && ++tries <= 4) return false;
+                if (obs.isAlive()) obs.removeOnPreDrawListener(this);
+                if (homeScrollPin == this) homeScrollPin = null;
+                return true;
+            }
+        };
+        obs.addOnPreDrawListener(homeScrollPin);
+    }
+
+    private int maxScroll(ScrollView scroller) {
+        View child = scroller.getChildAt(0);
+        if (child == null) return 0;
+        int viewport = scroller.getHeight() - scroller.getPaddingTop() - scroller.getPaddingBottom();
+        return Math.max(0, child.getHeight() - viewport);
+    }
+
+    private void holdScroller(ScrollView scroller, boolean hold) {
+        if (scroller instanceof HomeScrollView) ((HomeScrollView) scroller).setHoldScroll(hold);
+    }
+
+    private void forgetSavedHomeScroll() {
+        if (!showingOverview) return;
+        pendingHomeAnchor = -1;
+        holdRememberedFocus = false;
+        ScrollView scroller = moviesScroller();
+        if (scroller != null) holdScroller(scroller, false);
     }
 
     private void armReturnFocus(LinearLayout container, View focus, String guid) {
@@ -5350,7 +5467,7 @@ public class HomeActivity extends AppCompatActivity {
         return null;
     }
 
-    /** 离开首页前记下滚动落在哪个区块，返回重建页面后滚回原处。 */
+    /** 离开首页前记下滚动落在哪个区块。人还在媒体库里滑动时不能清掉。 */
     private void captureHomeScroll() {
         if (!showingOverview || moviesContainer == null) return;
         ScrollView scroller = moviesScroller();
@@ -5372,31 +5489,6 @@ public class HomeActivity extends AppCompatActivity {
         View focused = getCurrentFocus();
         if (focused != null) rememberFocusSection(focused);
         holdRememberedFocus = lastFocusSectionTag != null;
-    }
-
-    private void applyPendingHomeScroll() {
-        if (pendingHomeAnchor < 0 || !showingOverview || moviesContainer == null) return;
-        ScrollView scroller = moviesScroller();
-        if (scroller == null) return;
-        final int index = pendingHomeAnchor;
-        final int offset = pendingHomeAnchorOffset;
-        scroller.post(() -> {
-            if (!showingOverview || pendingHomeAnchor != index) return;
-            if (moviesContainer.getChildCount() == 0) return;
-            View anchor = moviesContainer.getChildAt(Math.min(index, moviesContainer.getChildCount() - 1));
-            scroller.scrollTo(0, Math.max(0, anchor.getTop() + offset));
-            initialFocusPlaced = true;
-            homeEntryFocused = true;
-            View restore = restoreInRememberedSection();
-            if (isUsableFocus(restore) && !restore.isFocused()) restore.requestFocus();
-            if (isUsableFocus(restore) && restore.isFocused()) holdRememberedFocus = false;
-            scroller.post(() -> {
-                if (!showingOverview || pendingHomeAnchor != index) return;
-                if (moviesContainer.getChildCount() == 0) return;
-                View again = moviesContainer.getChildAt(Math.min(index, moviesContainer.getChildCount() - 1));
-                scroller.scrollTo(0, Math.max(0, again.getTop() + offset));
-            });
-        });
     }
 
     private void rememberFocusSection(View v) {
@@ -5646,8 +5738,7 @@ public class HomeActivity extends AppCompatActivity {
             etSearch.clearFocus();
         }
         if (pendingHomeAnchor >= 0 && ev.getAction() == android.view.MotionEvent.ACTION_MOVE) {
-            pendingHomeAnchor = -1;
-            holdRememberedFocus = false;
+            forgetSavedHomeScroll();
         }
         return super.dispatchTouchEvent(ev);
     }
@@ -5667,8 +5758,7 @@ public class HomeActivity extends AppCompatActivity {
         if (event.getAction() == KeyEvent.ACTION_DOWN
                 && (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN
                 || keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
-            pendingHomeAnchor = -1;
-            holdRememberedFocus = false;
+            forgetSavedHomeScroll();
         }
         boolean dpad = keyCode == KeyEvent.KEYCODE_DPAD_UP
                 || keyCode == KeyEvent.KEYCODE_DPAD_DOWN
