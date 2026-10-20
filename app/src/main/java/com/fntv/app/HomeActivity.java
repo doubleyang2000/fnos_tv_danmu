@@ -1627,7 +1627,7 @@ public class HomeActivity extends AppCompatActivity {
         View logo = findViewById(R.id.ivHomeLogo);
         if (logo != null) logo.setVisibility(View.VISIBLE);
         if (tvHomeTitle != null) {
-            tvHomeTitle.setText("FN TV");
+            tvHomeTitle.setText("肥牛播放器");
             tvHomeTitle.setGravity(Gravity.CENTER_VERTICAL);
             android.widget.RelativeLayout.LayoutParams lp =
                     (android.widget.RelativeLayout.LayoutParams) tvHomeTitle.getLayoutParams();

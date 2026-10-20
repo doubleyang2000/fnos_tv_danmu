@@ -69,7 +69,7 @@ DPAD 遥控器友好
                     android:layout_toRightOf="@id/ivHomeLogo"
                     android:ellipsize="end"
                     android:singleLine="true"
-                    android:text="FN TV"
+                    android:text="肥牛播放器"
                     android:textColor="@color/text_primary"
                     android:textSize="20sp"
                     android:textStyle="bold" />
