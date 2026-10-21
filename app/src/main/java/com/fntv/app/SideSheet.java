@@ -375,10 +375,10 @@ final class SideSheet {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false);
         }
-        window.getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        hideSystemBars(window);
+        if (dialog.getContext() instanceof PlayerActivity) {
+            ((PlayerActivity) dialog.getContext()).suppressChromeForOverlay();
+        }
         window.getDecorView().setPadding(0, 0, 0, 0);
         WindowManager.LayoutParams lp = window.getAttributes();
         lp.gravity = Gravity.END | Gravity.TOP;
@@ -390,7 +390,39 @@ final class SideSheet {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }
         window.setAttributes(lp);
+        watchDismiss(dialog);
         dialog.setOnShowListener(d -> ensurePinned(dialog, widthDp));
+    }
+
+    /** 侧边栏自己全屏，不把播放器的状态栏留在上面。关掉后再按菜单栏状态恢复。 */
+    private static void hideSystemBars(Window window) {
+        View decor = window.getDecorView();
+        decor.setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.view.WindowInsetsController insets = decor.getWindowInsetsController();
+            if (insets != null) {
+                insets.hide(android.view.WindowInsets.Type.systemBars());
+                insets.setSystemBarsBehavior(
+                        android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        }
+    }
+
+    private static void watchDismiss(Dialog dialog) {
+        dialog.setOnDismissListener(d -> finishSheet(dialog));
+    }
+
+    private static void finishSheet(Dialog dialog) {
+        if (open == dialog) open = null;
+        backActions.remove(dialog);
+        Runnable extra = dismissHooks.remove(dialog);
+        if (extra != null) extra.run();
+        if (dialog.getContext() instanceof PlayerActivity) {
+            ((PlayerActivity) dialog.getContext()).restoreChromeSystemUi();
+        }
     }
 
     /** 换页后重新把面板钉回右侧，避免内容再次铺满窗口。 */
@@ -398,7 +430,18 @@ final class SideSheet {
         pinPanel(dialog, widthDp);
         Window window = dialog.getWindow();
         if (window == null) return;
-        window.getDecorView().post(() -> pinPanel(dialog, widthDp));
+        View decor = window.getDecorView();
+        decor.post(() -> pinPanel(dialog, widthDp));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            decor.setOnApplyWindowInsetsListener((v, insets) -> {
+                v.post(() -> {
+                    if (!dialog.isShowing()) return;
+                    View panel = sidePanel(dialog);
+                    if (panel != null) applyStatusInset(dialog, panel);
+                });
+                return v.onApplyWindowInsets(insets);
+            });
+        }
     }
 
     /** 浮窗在电视上只会包住内容。把面板拉到屏幕右侧，从顶到底铺满。 */
@@ -407,10 +450,9 @@ final class SideSheet {
         if (window == null) return;
         window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         window.getDecorView().setPadding(0, 0, 0, 0);
-        View content = window.findViewById(android.R.id.content);
-        if (!(content instanceof ViewGroup) || ((ViewGroup) content).getChildCount() == 0) return;
-        ViewGroup host = (ViewGroup) content;
-        View panel = host.getChildAt(host.getChildCount() - 1);
+        View panel = sidePanel(dialog);
+        if (panel == null) return;
+        ViewGroup host = (ViewGroup) panel.getParent();
         boolean first = !"side_panel".equals(panel.getTag());
         int width = (int) (widthDp * dialog.getContext().getResources().getDisplayMetrics().density);
         FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(
@@ -424,12 +466,28 @@ final class SideSheet {
             host.setOnClickListener(v -> {
                 if (dialog.isShowing()) dialog.dismiss();
             });
-            int inset = statusBarInset(dialog.getContext());
-            if (inset > 0) {
-                panel.setPadding(panel.getPaddingLeft(), panel.getPaddingTop() + inset,
-                        panel.getPaddingRight(), panel.getPaddingBottom());
-            }
         }
+        applyStatusInset(dialog, panel);
+    }
+
+    private static View sidePanel(Dialog dialog) {
+        Window window = dialog.getWindow();
+        if (window == null) return null;
+        View content = window.findViewById(android.R.id.content);
+        if (!(content instanceof ViewGroup) || ((ViewGroup) content).getChildCount() == 0) return null;
+        ViewGroup host = (ViewGroup) content;
+        return host.getChildAt(host.getChildCount() - 1);
+    }
+
+    /** 状态栏高度可能晚于第一次布局才就绪，每次钉板都按最新值重设，避免右上角按钮被挡住。 */
+    private static void applyStatusInset(Dialog dialog, View panel) {
+        int inset = statusBarInset(dialog);
+        Object raw = panel.getTag(R.id.status_bar_inset);
+        int applied = raw instanceof Integer ? (Integer) raw : 0;
+        if (applied == inset) return;
+        panel.setPadding(panel.getPaddingLeft(), panel.getPaddingTop() - applied + inset,
+                panel.getPaddingRight(), panel.getPaddingBottom());
+        panel.setTag(R.id.status_bar_inset, inset);
     }
 
     private static ScrollView sheetScroll(Context context) {
@@ -455,12 +513,7 @@ final class SideSheet {
     private static void track(Dialog dialog) {
         open = dialog;
         dialog.setOnKeyListener((d, keyCode, event) -> onKey(dialog, event, true));
-        dialog.setOnDismissListener(d -> {
-            if (open == dialog) open = null;
-            backActions.remove(dialog);
-            Runnable extra = dismissHooks.remove(dialog);
-            if (extra != null) extra.run();
-        });
+        watchDismiss(dialog);
     }
 
     /** 侧边栏内返回：有下级页就退一级，否则关掉。 */
@@ -732,15 +785,42 @@ final class SideSheet {
     }
 
     /** 菜单栏露出状态栏时，侧边栏背景仍铺满，文字下移避开状态栏。 */
-    private static int statusBarInset(Context context) {
-        if (!(context instanceof android.app.Activity)) return 0;
-        android.app.Activity activity = (android.app.Activity) context;
-        View decor = activity.getWindow().getDecorView();
-        if ((decor.getSystemUiVisibility() & View.SYSTEM_UI_FLAG_FULLSCREEN) != 0) return 0;
+    private static int statusBarInset(Dialog dialog) {
+        if (dialog == null) return 0;
+        Window window = dialog.getWindow();
+        int fromDialog = topSystemInset(window != null ? window.getDecorView() : null);
+        Context context = dialog.getContext();
+        int fromActivity = 0;
+        if (context instanceof android.app.Activity) {
+            fromActivity = topSystemInset(((android.app.Activity) context).getWindow().getDecorView());
+        }
+        int inset = Math.max(fromDialog, fromActivity);
+        if (inset > 0) return inset;
+        if (statusBarHidden(context)) return 0;
+        return statusBarDimen(context);
+    }
+
+    private static int topSystemInset(View decor) {
+        if (decor == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return 0;
+        android.view.WindowInsets insets = decor.getRootWindowInsets();
+        if (insets == null || !insets.isVisible(android.view.WindowInsets.Type.statusBars())) return 0;
+        return insets.getInsetsIgnoringVisibility(
+                android.view.WindowInsets.Type.statusBars()
+                        | android.view.WindowInsets.Type.displayCutout()).top;
+    }
+
+    private static boolean statusBarHidden(Context context) {
+        if (!(context instanceof android.app.Activity)) return false;
+        View decor = ((android.app.Activity) context).getWindow().getDecorView();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.view.WindowInsets insets = decor.getRootWindowInsets();
-            if (insets != null) return insets.getInsets(android.view.WindowInsets.Type.statusBars()).top;
+            if (insets != null) return !insets.isVisible(android.view.WindowInsets.Type.statusBars());
         }
+        return (decor.getSystemUiVisibility() & View.SYSTEM_UI_FLAG_FULLSCREEN) != 0;
+    }
+
+    private static int statusBarDimen(Context context) {
+        if (context == null) return 0;
         int resId = context.getResources().getIdentifier("status_bar_height", "dimen", "android");
         return resId > 0 ? context.getResources().getDimensionPixelSize(resId) : 0;
     }

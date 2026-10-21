@@ -355,6 +355,7 @@ public class PlayerActivity extends AppCompatActivity {
                 moreOpen = false;
                 if (moreScrim != null) moreScrim.setVisibility(View.GONE);
                 ctrlVis = false;
+                holdResumePrompt(false);
                 controller.setVisibility(View.INVISIBLE);
                 topBar.setVisibility(View.INVISIBLE);
                 btnLock.setVisibility(View.INVISIBLE);
@@ -468,6 +469,7 @@ public class PlayerActivity extends AppCompatActivity {
             isLocked = !isLocked;
             btnLock.setImageResource(isLocked ? R.drawable.ic_lock : R.drawable.ic_unlock);
             if (isLocked) {
+                holdResumePrompt(false);
                 topBar.setVisibility(View.INVISIBLE);
                 controller.setVisibility(View.INVISIBLE);
                 btnLock.setVisibility(View.INVISIBLE);
@@ -668,8 +670,54 @@ public class PlayerActivity extends AppCompatActivity {
         if (resumeBar == null || resumeBar.getVisibility() != View.VISIBLE) return;
         boolean focused = btnRestart != null && btnRestart.hasFocus();
         resumeBar.setVisibility(View.GONE);
+        attachResumePromptToMenu();
         wirePlayerFocus();
-        if (returnFocus && focused && ctrlVis && seekBar != null) seekBar.requestFocus();
+        if (returnFocus && focused) {
+            if (ctrlVis && seekBar != null) seekBar.requestFocus();
+            else if (playerView != null) playerView.requestFocus();
+        }
+    }
+
+    /** 菜单栏收起时把续播提示留在画面右下角，菜单回来再放回进度条上方。 */
+    private void holdResumePrompt(boolean menuVisible) {
+        if (resumeBar == null || resumeBar.getVisibility() != View.VISIBLE || controller == null) return;
+        if (menuVisible) attachResumePromptToMenu();
+        else detachResumePromptFromMenu();
+    }
+
+    private void attachResumePromptToMenu() {
+        if (resumeBar == null || !(controller instanceof ViewGroup)) return;
+        ViewGroup parent = (ViewGroup) resumeBar.getParent();
+        if (parent == controller) return;
+        boolean focused = btnRestart != null && btnRestart.hasFocus();
+        if (parent != null) parent.removeView(resumeBar);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ((ViewGroup) controller).addView(resumeBar, Math.min(1, ((ViewGroup) controller).getChildCount()), lp);
+        if (focused) btnRestart.requestFocus();
+    }
+
+    private void detachResumePromptFromMenu() {
+        if (resumeBar == null || controller == null || !(controller.getParent() instanceof FrameLayout)) return;
+        FrameLayout root = (FrameLayout) controller.getParent();
+        if (resumeBar.getParent() == root) return;
+        boolean focused = btnRestart != null && btnRestart.hasFocus();
+        ViewGroup parent = (ViewGroup) resumeBar.getParent();
+        if (parent != null) parent.removeView(resumeBar);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.END);
+        int margin = (int) (16 * getResources().getDisplayMetrics().density);
+        lp.rightMargin = margin;
+        lp.bottomMargin = margin;
+        root.addView(resumeBar, root.indexOfChild(controller) + 1, lp);
+        if (btnRestart != null) {
+            TvFocus.point(btnRestart, View.FOCUS_UP, btnRestart);
+            TvFocus.point(btnRestart, View.FOCUS_DOWN, btnRestart);
+            TvFocus.point(btnRestart, View.FOCUS_LEFT, btnRestart);
+            TvFocus.point(btnRestart, View.FOCUS_RIGHT, btnRestart);
+            if (focused && !btnRestart.requestFocus()) btnRestart.post(btnRestart::requestFocus);
+        }
     }
 
     private void restartFromBeginning() {
@@ -1899,8 +1947,10 @@ public class PlayerActivity extends AppCompatActivity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dpPx(48));
+        row.setClipChildren(true);
         row.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dpPx(44)));
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         if (back != null) {
             FrameLayout hit = new FrameLayout(this);
             hit.setLayoutParams(new LinearLayout.LayoutParams(dpPx(48), dpPx(48)));
@@ -1945,6 +1995,11 @@ public class PlayerActivity extends AppCompatActivity {
         row.addView(heading);
         if (reset != null) {
             Button resetBtn = skipTextButton("重置");
+            resetBtn.setMinHeight(dpPx(36));
+            resetBtn.setMinimumHeight(dpPx(36));
+            LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dpPx(36));
+            resetBtn.setLayoutParams(resetLp);
             resetBtn.setOnClickListener(v -> reset.run());
             row.addView(resetBtn);
         } else {
@@ -2514,7 +2569,9 @@ public class PlayerActivity extends AppCompatActivity {
             if (moreScrim != null) moreScrim.setVisibility(View.GONE);
         }
         ctrlVis = show;
+        if (!show) holdResumePrompt(false);
         controller.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
+        if (show) holdResumePrompt(true);
         topBar.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
         btnLock.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
         if (show) {
@@ -2524,6 +2581,16 @@ public class PlayerActivity extends AppCompatActivity {
             controller.post(this::wirePlayerFocus);
         }
         applyChromeSystemUi(show);
+    }
+
+    /** 侧边栏打开时收起状态栏，关掉后若菜单栏还在再露出来。 */
+    void suppressChromeForOverlay() {
+        hideSystemUi();
+        if (topBar != null) topBar.setPadding(0, 0, 0, topBar.getPaddingBottom());
+    }
+
+    void restoreChromeSystemUi() {
+        applyChromeSystemUi(ctrlVis && !isLocked && !moreOpen);
     }
 
     /** 手机弹出控制栏时露出状态栏。电视保持全屏。 */
@@ -2566,6 +2633,7 @@ public class PlayerActivity extends AppCompatActivity {
         moreOpen = show;
         if (moreScrim != null) moreScrim.setVisibility(show ? View.VISIBLE : View.GONE);
         if (show) {
+            holdResumePrompt(false);
             controller.setVisibility(View.INVISIBLE);
             topBar.setVisibility(View.INVISIBLE);
             btnLock.setVisibility(View.INVISIBLE);
@@ -2578,7 +2646,7 @@ public class PlayerActivity extends AppCompatActivity {
                 int pad = (int) (12 * getResources().getDisplayMetrics().density);
                 panel.setPadding(pad, pad, pad, pad);
             }
-            applyChromeSystemUi(true);
+            suppressChromeForOverlay();
             refreshSleepLabel();
             handler.removeCallbacks(sleepLabelTick);
             if (SleepTimer.isRunning()) handler.postDelayed(sleepLabelTick, 1000);
@@ -2594,9 +2662,11 @@ public class PlayerActivity extends AppCompatActivity {
         } else if (ctrlVis && !isLocked) {
             if (playerView != null) playerView.setFocusable(true);
             controller.setVisibility(View.VISIBLE);
+            holdResumePrompt(true);
             topBar.setVisibility(View.VISIBLE);
             btnLock.setVisibility(View.VISIBLE);
             resetHideTimer();
+            applyChromeSystemUi(true);
             controller.post(this::wirePlayerFocus);
         }
     }
@@ -2611,10 +2681,12 @@ public class PlayerActivity extends AppCompatActivity {
             return;
         }
         // 有焦点也要收起（TV 首次进播放器焦点在进度条上，否则菜单永远不消失）
-        if (controller != null) controller.clearFocus();
+        boolean keepResumeFocus = resumeBar != null && resumeBar.getVisibility() == View.VISIBLE
+                && btnRestart != null && btnRestart.hasFocus();
+        if (controller != null && !keepResumeFocus) controller.clearFocus();
         if (topBar != null) topBar.clearFocus();
         if (btnLock != null) btnLock.clearFocus();
-        if (playerView != null) {
+        if (!keepResumeFocus && playerView != null) {
             playerView.setFocusable(true);
             playerView.requestFocus();
         }
