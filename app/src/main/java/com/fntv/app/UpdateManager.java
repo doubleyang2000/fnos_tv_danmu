@@ -35,9 +35,9 @@ public class UpdateManager {
     private final Activity activity;
     private final Button btnCheckUpdate;
     private final int currentVersionCode;
-    private boolean busy;
-    /** 自动检查时不改按钮焦点，也不提示“已是最新”或网络失败。 */
-    private boolean quiet;
+    private volatile boolean busy;
+    /** 自动检查时不改按钮文字，也不提示“已是最新”或网络失败。用户点按钮后会改成显式检查。 */
+    private volatile boolean quiet;
     /** 首页是否在前台。公开 SDK 没有 Activity.isResumed。 */
     private boolean inForeground;
     private Dialog updateDialog;
@@ -101,6 +101,12 @@ public class UpdateManager {
         btnCheckUpdate.setText("检查更新");
     }
 
+    private void showCheckingLabel() {
+        if (btnCheckUpdate == null) return;
+        // 不禁用按钮：禁用后焦点会掉到设置页顶部
+        btnCheckUpdate.setText("检查中...");
+    }
+
     // ========== 检查更新 ==========
 
     public void checkUpdate() {
@@ -108,14 +114,18 @@ public class UpdateManager {
     }
 
     private void startCheck(boolean quietCheck) {
-        if (busy) return;
         if (!canPrompt()) return;
+        if (busy) {
+            // 打开应用时的静默检查还没结束。这次点击接上同一次检查，并立刻改按钮。
+            if (!quietCheck && quiet) {
+                quiet = false;
+                showCheckingLabel();
+            }
+            return;
+        }
         busy = true;
         quiet = quietCheck;
-        if (!quietCheck && btnCheckUpdate != null) {
-            // 禁用后按钮拿不住焦点，电视会把焦点丢到设置页顶部
-            btnCheckUpdate.setText("检查中...");
-        }
+        if (!quietCheck) showCheckingLabel();
         new Thread(() -> {
             try {
                 org.json.JSONObject json = null;
