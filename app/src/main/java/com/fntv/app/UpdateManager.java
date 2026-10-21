@@ -96,14 +96,9 @@ public class UpdateManager {
 
     private void resetBtn() {
         busy = false;
-        boolean stayPut = quiet;
         quiet = false;
         if (btnCheckUpdate == null) return;
-        btnCheckUpdate.setEnabled(true);
         btnCheckUpdate.setText("检查更新");
-        if (!stayPut && (updateDialog == null || !updateDialog.isShowing())) {
-            btnCheckUpdate.requestFocus();
-        }
     }
 
     // ========== 检查更新 ==========
@@ -118,9 +113,8 @@ public class UpdateManager {
         busy = true;
         quiet = quietCheck;
         if (!quietCheck && btnCheckUpdate != null) {
-            btnCheckUpdate.setEnabled(false);
+            // 禁用后按钮拿不住焦点，电视会把焦点丢到设置页顶部
             btnCheckUpdate.setText("检查中...");
-            btnCheckUpdate.requestFocus();
         }
         new Thread(() -> {
             try {

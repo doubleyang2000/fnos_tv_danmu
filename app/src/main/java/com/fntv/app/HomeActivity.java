@@ -128,6 +128,8 @@ public class HomeActivity extends AppCompatActivity {
     private android.view.ViewTreeObserver.OnPreDrawListener homeScrollPin;
     private String lastFocusSectionTag;
     private int lastFocusIndexInSection;
+    /** 离开前那一项的 guid，列表重画后仍能对上同一张卡片。 */
+    private String lastFocusGuid;
     private boolean holdRememberedFocus;
     private Button detailPlayBtn;
     private TextView detailOverview;
@@ -354,6 +356,18 @@ public class HomeActivity extends AppCompatActivity {
         } else if (currentTab == 0 && !overviewBuilt && showingOverview && !overviewLoading) {
             loadOverview();
         }
+        if (isTelevision() && moviesContainer != null) {
+            runBeforeDraw(moviesContainer, this::restoreTvFocusAfterReturn);
+        }
+    }
+
+    /** 从播放器或其他页面回到首页时，焦点经常先落在刷新上，这里把它放回离开前的那一项。 */
+    private void restoreTvFocusAfterReturn() {
+        if (!isTelevision() || currentTab != 0 || !showingOverview) return;
+        View focused = getCurrentFocus();
+        if (isUsableFocus(focused) && isInCurrentPanel(focused) && !isHomeHeader(focused)) return;
+        if (headerFocusedByUser && isHomeHeader(focused)) return;
+        restoreRememberedContentFocus();
     }
 
     @Override
@@ -465,10 +479,12 @@ public class HomeActivity extends AppCompatActivity {
         View settingsBtn = findViewById(R.id.btnHomeSettings);
         if (settingsBtn == null) return;
         settingsBtn.post(() -> {
-            if (currentTab != 0 || !settingsBtn.isShown()) return;
+            if (currentTab != 0 || !showingOverview) return;
             View focused = getCurrentFocus();
-            if (isUsableFocus(focused) && (isHomeHeader(focused) || isInCurrentPanel(focused))) return;
-            settingsBtn.requestFocus();
+            if (isUsableFocus(focused) && isInCurrentPanel(focused) && !isHomeHeader(focused)) return;
+            if (headerFocusedByUser && isHomeHeader(focused)) return;
+            if (restoreRememberedContentFocus()) return;
+            if (isUsableFocus(settingsBtn)) settingsBtn.requestFocus();
         });
     }
 
@@ -4815,10 +4831,11 @@ public class HomeActivity extends AppCompatActivity {
     private void setupTvFocus() {
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
             if (newF != null) TvFocus.remember(newF);
-            if (newF != null && !isTabBar(newF) && newF.isShown()) {
-                lastContentFocus = newF;
-                rememberFocusSection(newF);
-            }
+            if (newF == null || isTabBar(newF) || !newF.isShown() || holdRememberedFocus) return;
+            // 内容被拆掉时焦点会掉到刷新上，不能把离开前的位置冲掉
+            if (isHomeHeader(newF) && !headerFocusedByUser) return;
+            lastContentFocus = newF;
+            rememberFocusSection(newF);
         });
         TvFocus.bindRow(Arrays.asList(tabMovies, tabLibrary, tabSettings));
         TvFocus.point(tabMovies, View.FOCUS_DOWN, tabMovies);
@@ -5303,9 +5320,15 @@ public class HomeActivity extends AppCompatActivity {
         attachPage(page);
         syncHomeSwipe();
         wireOverviewFocus();
-        if (isTelevision() && page.scrollY > 0) {
-            View restore = restoreInRememberedSection();
-            if (isUsableFocus(restore)) restore.requestFocus();
+        if (isTelevision()) {
+            View parked = page.focus;
+            runBeforeDraw(page.container, () -> {
+                View target = isUsableFocus(parked) ? parked : restoreInRememberedSection();
+                if (!isUsableFocus(target)) return;
+                requestFocusQuiet(target);
+                homeEntryFocused = true;
+                initialFocusPlaced = true;
+            });
         }
         return true;
     }
@@ -5495,6 +5518,7 @@ public class HomeActivity extends AppCompatActivity {
         if (holdRememberedFocus) return;
         lastFocusSectionTag = null;
         lastFocusIndexInSection = 0;
+        lastFocusGuid = focusIdentity(v);
         View p = v;
         while (p != null) {
             Object tag = p.getTag();
@@ -5546,8 +5570,44 @@ public class HomeActivity extends AppCompatActivity {
         return "lib_header";
     }
 
+    private String focusIdentity(View v) {
+        View cursor = v;
+        while (cursor != null) {
+            Object tag = cursor.getTag();
+            if (tag instanceof PlayListItem) {
+                String guid = ((PlayListItem) tag).guid;
+                if (guid != null && !guid.isEmpty()) return guid;
+            }
+            if (tag instanceof String && ((String) tag).startsWith("lib_tile_")) return (String) tag;
+            ViewParent parent = cursor.getParent();
+            cursor = parent instanceof View ? (View) parent : null;
+        }
+        return null;
+    }
+
+    private View findFocusByIdentity(ViewGroup root, String identity) {
+        if (root == null || identity == null) return null;
+        for (int i = 0; i < root.getChildCount(); i++) {
+            View child = root.getChildAt(i);
+            if (child.isFocusable() && child.getVisibility() == View.VISIBLE
+                    && identity.equals(focusIdentity(child))) {
+                return child;
+            }
+            if (child instanceof ViewGroup) {
+                View found = findFocusByIdentity((ViewGroup) child, identity);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
     private View restoreInRememberedSection() {
-        if (lastFocusSectionTag == null || moviesContainer == null) return null;
+        if (moviesContainer == null) return null;
+        if (lastFocusGuid != null) {
+            View byGuid = findFocusByIdentity(moviesContainer, lastFocusGuid);
+            if (isUsableFocus(byGuid)) return byGuid;
+        }
+        if (lastFocusSectionTag == null) return null;
         if (lastFocusSectionTag.startsWith("header:")) {
             String rest = lastFocusSectionTag.substring("header:".length());
             if ("live_channel".equals(rest)) {
@@ -5592,6 +5652,21 @@ public class HomeActivity extends AppCompatActivity {
         return TvFocus.collectVisibleFocusables(shortcuts);
     }
 
+    /** 焦点掉在标题栏时，回到离开页面前记住的那一项。 */
+    private boolean restoreRememberedContentFocus() {
+        View restore = null;
+        if (isUsableFocus(lastContentFocus) && isInCurrentPanel(lastContentFocus)
+                && !isHomeHeader(lastContentFocus)) {
+            restore = lastContentFocus;
+        }
+        if (!isUsableFocus(restore)) restore = restoreInRememberedSection();
+        if (!isUsableFocus(restore) || !isInCurrentPanel(restore) || isHomeHeader(restore)) return false;
+        requestFocusQuiet(restore);
+        homeEntryFocused = true;
+        initialFocusPlaced = true;
+        return true;
+    }
+
     private void restoreOverviewFocus() {
         if (pendingReturnFocus != null || pendingReturnGuid != null) {
             applyReturnFocus();
@@ -5599,13 +5674,16 @@ public class HomeActivity extends AppCompatActivity {
         }
         if (suppressBrowseAutoFocus) return;
         if (currentTab != 0 || !showingOverview) return;
-        if (pendingHomeAnchor >= 0) return;
         View focused = getCurrentFocus();
+        boolean onRealContent = isUsableFocus(focused) && !isHomeHeader(focused) && !isTabBar(focused)
+                && isInCurrentPanel(focused);
+        if (isTelevision() && !onRealContent && !(isHomeHeader(focused) && headerFocusedByUser)) {
+            if (restoreRememberedContentFocus()) return;
+        }
+        if (pendingHomeAnchor >= 0) return;
         View searchBtn = findViewById(R.id.btnHomeSearch);
         List<View> continueCards = continueCards();
         List<View> shortcuts = shortcutCards();
-        boolean onRealContent = isUsableFocus(focused) && !isHomeHeader(focused) && !isTabBar(focused)
-                && isInCurrentPanel(focused);
         if (isHomeHeader(focused) && headerFocusedByUser) return;
         if (!homeEntryFocused || focused == null || isHomeHeader(focused)) {
             View first = !continueCards.isEmpty() ? continueCards.get(0)
@@ -5794,6 +5872,30 @@ public class HomeActivity extends AppCompatActivity {
             return false;
         }
         return moveExplicitFocus(focused, keyCode);
+    }
+
+    /** 画出这一帧之前执行，避免先画到刷新按钮再跳走。 */
+    private void runBeforeDraw(View anchor, Runnable action) {
+        if (anchor == null || action == null) return;
+        android.view.ViewTreeObserver obs = anchor.getViewTreeObserver();
+        obs.addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+            @Override public boolean onPreDraw() {
+                if (obs.isAlive()) obs.removeOnPreDrawListener(this);
+                action.run();
+                return true;
+            }
+        });
+    }
+
+    /** 只移焦点，不让滚动容器把列表拽到卡片位置。 */
+    private void requestFocusQuiet(View target) {
+        if (!isUsableFocus(target) || target.isFocused()) return;
+        ScrollView scroller = findVerticalScroller(target);
+        if (scroller != null) holdScroller(scroller, true);
+        target.requestFocus();
+        if (scroller != null && pendingHomeAnchor < 0) {
+            scroller.post(() -> holdScroller(scroller, false));
+        }
     }
 
     private void focusOn(View target) {

@@ -223,8 +223,6 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:focusable="true"
-                android:nextFocusDown="@+id/dm_outline"
                 android:paddingTop="8dp"
                 android:paddingBottom="4dp"
                 android:text="文字描边"
@@ -237,9 +235,7 @@
                 android:layout_gravity="end"
                 android:layout_marginBottom="8dp"
                 android:clickable="true"
-                android:focusable="true"
-                android:nextFocusDown="@+id/dm_density"
-                android:nextFocusUp="@+id/dm_outline" />
+                android:focusable="true" />
 
             <include
                 android:id="@+id/dm_density"
@@ -264,8 +260,6 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:focusable="true"
-                android:nextFocusDown="@+id/dm_custom_fps"
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
                 android:text="自定义刷新率"
@@ -278,9 +272,7 @@
                 android:layout_gravity="end"
                 android:layout_marginBottom="8dp"
                 android:clickable="true"
-                android:focusable="true"
-                android:nextFocusDown="@+id/dm_fps"
-                android:nextFocusUp="@+id/dm_custom_fps" />
+                android:focusable="true" />
 
             <include
                 android:id="@+id/dm_fps"

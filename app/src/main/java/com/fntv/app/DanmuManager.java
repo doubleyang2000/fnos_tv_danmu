@@ -413,8 +413,46 @@ public class DanmuManager {
             suppressLive[0] = false;
             applyDanmuSettings(dialog);
         });
+        wireDanmuSettingsFocus(dialog);
         SideSheet.place(dialog);
         dialog.show();
+    }
+
+    /** 设置项按界面顺序上下走。滑条左右仍调数值，避免从下面往上时对不上。 */
+    private void wireDanmuSettingsFocus(android.app.Dialog dialog) {
+        java.util.ArrayList<View> items = new java.util.ArrayList<>();
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_settings_reset));
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_sw));
+        addDanmuSlider(items, dialog, R.id.dm_area);
+        addDanmuSlider(items, dialog, R.id.dm_speed);
+        addDanmuSlider(items, dialog, R.id.dm_opacity);
+        addDanmuSlider(items, dialog, R.id.dm_fontsize);
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_matchBtn));
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_listBtn));
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_show_scroll));
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_show_top));
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_show_bottom));
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_time_scale));
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_outline));
+        addDanmuSlider(items, dialog, R.id.dm_density);
+        addDanmuSlider(items, dialog, R.id.dm_maxactive);
+        addDanmuSlider(items, dialog, R.id.dm_rowspacing);
+        addDanmuSlider(items, dialog, R.id.dm_offset);
+        addDanmuSlider(items, dialog, R.id.dm_maxcomments);
+        addDanmuFocus(items, dialog.findViewById(R.id.dm_custom_fps));
+        addDanmuSlider(items, dialog, R.id.dm_fps);
+        TvFocus.bindChain(items);
+    }
+
+    private void addDanmuFocus(java.util.List<View> items, View view) {
+        if (view != null) items.add(view);
+    }
+
+    private void addDanmuSlider(java.util.List<View> items, android.app.Dialog dialog, int id) {
+        View root = dialog.findViewById(id);
+        if (root == null) return;
+        View bar = root.findViewById(R.id.dm_seekbar);
+        if (bar != null) items.add(bar);
     }
 
     /** 按当前控件立刻保存并作用到画面，不用再点确定。 */

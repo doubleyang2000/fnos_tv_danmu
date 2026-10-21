@@ -74,8 +74,8 @@ public class PlayerActivity extends AppCompatActivity {
     private String mediaGuid, videoGuid, audioGuid, subtitleGuid, resolution;
     private boolean seeked = false, ctrlVis = false, infoVis = false;
     private long seekTs = 0;
-    private float[] speeds = {1.0f, 1.25f, 1.5f, 2.0f, 0.5f, 0.75f};
-    private int speedIdx = 0, ratioIdx = 0;
+    private float[] speeds = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f};
+    private int speedIdx = 2, ratioIdx = 0;
     private boolean isHwDecode = true;
     private EpisodeManager episodeManager;
     private int seasonNumber = 1;
@@ -383,7 +383,7 @@ public class PlayerActivity extends AppCompatActivity {
         }, btnEpisodeList, btnNextEp);
 
         btnPlayPause.setOnClickListener(v -> togglePlay());
-        btnSpeed.setOnClickListener(v -> cycleSpeed());
+        btnSpeed.setOnClickListener(v -> showSpeedSheet());
         btnSleep = findViewById(R.id.btnSleep);
         if (btnSleep != null) btnSleep.setOnClickListener(v -> showSleepDialog());
         btnMore.setOnClickListener(v -> showMore(true));
@@ -1241,12 +1241,23 @@ public class PlayerActivity extends AppCompatActivity {
                 .build();
     }
 
-    private void cycleSpeed() {
-        speedIdx = (speedIdx + 1) % speeds.length;
-        playbackSpeed = speeds[speedIdx];
-        speedBoost = false;
-        btnSpeed.setText(speedText(playbackSpeed));
-        applyPlaybackSpeed();
+    /** 倍速从右侧栏点选，当前档用勾标出。 */
+    private void showSpeedSheet() {
+        java.util.ArrayList<SideSheet.Choice> choices = new java.util.ArrayList<>();
+        int selected = speedIdx;
+        for (int i = 0; i < speeds.length; i++) {
+            if (Math.abs(speeds[i] - playbackSpeed) < 0.01f) selected = i;
+            String detail = Math.abs(speeds[i] - 1f) < 0.01f ? "正常" : "";
+            choices.add(new SideSheet.Choice(speedText(speeds[i]), detail, null));
+        }
+        SideSheet.showCards(this, "倍速", null, choices, selected, "", (dialog, which) -> {
+            if (which < 0 || which >= speeds.length) return;
+            speedIdx = which;
+            playbackSpeed = speeds[which];
+            speedBoost = false;
+            btnSpeed.setText(speedText(playbackSpeed));
+            applyPlaybackSpeed();
+        });
     }
 
     /** 把当前倍速写进播放器。长按加速时暂时用 2 倍，松手回到用户选的倍速。 */
@@ -1711,16 +1722,28 @@ public class PlayerActivity extends AppCompatActivity {
         return (int) Math.max(0, player.getCurrentPosition() / 1000);
     }
 
-    private int currentSkipSeconds(boolean intro) {
-        if (player == null) return 0;
-        int pos = (int) Math.max(0, player.getCurrentPosition() / 1000);
-        if (intro) return pos;
+    /** 片尾快捷条显示距结尾还剩多久。片长未知时返回 -1。 */
+    private int remainingToEndSeconds() {
+        if (player == null) return -1;
         long dur = player.getDuration();
-        if (dur <= 0) {
+        if (dur <= 0) return -1;
+        return (int) Math.max(0, dur / 1000 - playheadSeconds());
+    }
+
+    /** 快捷条上跟着走的时间：片头是播放进度，片尾是距片尾。 */
+    private int shortcutSeconds(boolean intro) {
+        if (intro) return playheadSeconds();
+        return Math.max(0, remainingToEndSeconds());
+    }
+
+    private int currentSkipSeconds(boolean intro) {
+        if (intro) return playheadSeconds();
+        int left = remainingToEndSeconds();
+        if (left < 0) {
             AppToast.show(this, "还不知道片长，稍后再设片尾");
             return -1;
         }
-        return (int) Math.max(0, dur / 1000 - pos);
+        return left;
     }
 
     private void showSkipCustom(android.app.Dialog dialog, boolean intro) {
@@ -1948,17 +1971,17 @@ public class PlayerActivity extends AppCompatActivity {
         text.setOrientation(LinearLayout.VERTICAL);
         text.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         TextView title = new TextView(this);
-        title.setText("当前播放时间");
+        title.setText(intro ? "当前播放时间" : "距离片尾");
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
         text.addView(title);
-        TextView time = skipHint(formatSkipClock(playheadSeconds()));
+        TextView time = skipHint(formatSkipClock(shortcutSeconds(intro)));
         time.setPadding(0, dpPx(4), 0, 0);
         text.addView(time);
         Runnable tickPlayhead = new Runnable() {
             @Override public void run() {
                 if (!time.isAttachedToWindow()) return;
-                String next = formatSkipClock(playheadSeconds());
+                String next = formatSkipClock(shortcutSeconds(intro));
                 if (!next.equals(time.getText().toString())) time.setText(next);
                 time.postDelayed(this, 200);
             }
