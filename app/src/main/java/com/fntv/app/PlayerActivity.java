@@ -1304,7 +1304,7 @@ public class PlayerActivity extends AppCompatActivity {
             speedIdx = which;
             playbackSpeed = speeds[which];
             speedBoost = false;
-            btnSpeed.setText(speedText(playbackSpeed));
+            refreshSpeedLabel();
             applyPlaybackSpeed();
         });
     }
@@ -1387,6 +1387,12 @@ public class PlayerActivity extends AppCompatActivity {
     private String speedText(float s) {
         String n = s == (int) s ? String.valueOf((int) s) : String.valueOf(s);
         return n + "X";
+    }
+
+    /** 1 倍时菜单栏显示「倍速」，其他档显示具体倍率。 */
+    private void refreshSpeedLabel() {
+        if (btnSpeed == null) return;
+        btnSpeed.setText(Math.abs(playbackSpeed - 1f) < 0.01f ? "倍速" : speedText(playbackSpeed));
     }
 
     private String playClock(long cur, long dur) {
