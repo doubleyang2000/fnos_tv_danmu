@@ -72,7 +72,7 @@
             android:clickable="true"
             android:contentDescription="更多"
             android:focusable="true"
-            android:nextFocusDown="@+id/btnLock"
+            android:nextFocusDown="@+id/seekBar"
             android:nextFocusLeft="@+id/btnBack"
             android:padding="6dp"
             android:scaleType="fitCenter"

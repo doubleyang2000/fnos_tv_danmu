@@ -171,6 +171,7 @@ public class PlayerActivity extends AppCompatActivity {
         };
         danmuView = findViewById(R.id.danmuView);
         btnLock = (ImageView) findViewById(R.id.btnLock);
+        showLockButton(false);
         tvTitle = findViewById(R.id.tvTitle);
         tvDanmuStatus = findViewById(R.id.tvDanmuStatus);
         btnCloudMode = findViewById(R.id.btnCloudMode);
@@ -358,7 +359,7 @@ public class PlayerActivity extends AppCompatActivity {
                 holdResumePrompt(false);
                 controller.setVisibility(View.INVISIBLE);
                 topBar.setVisibility(View.INVISIBLE);
-                btnLock.setVisibility(View.INVISIBLE);
+                showLockButton(false);
                 applyChromeSystemUi(false);
             }
             @Override public void onSwitchEpisode(String guid, String title) {
@@ -472,7 +473,7 @@ public class PlayerActivity extends AppCompatActivity {
                 holdResumePrompt(false);
                 topBar.setVisibility(View.INVISIBLE);
                 controller.setVisibility(View.INVISIBLE);
-                btnLock.setVisibility(View.INVISIBLE);
+                showLockButton(false);
             } else {
                 showCtrl(true);
                 // 解锁后焦点还给视频区域
@@ -2555,7 +2556,7 @@ public class PlayerActivity extends AppCompatActivity {
 
     private void showCtrl(boolean show) {
         if (show && isLocked) {
-            btnLock.setVisibility(View.VISIBLE);
+            showLockButton(true);
             applyChromeSystemUi(true);
             return;
         }
@@ -2573,7 +2574,7 @@ public class PlayerActivity extends AppCompatActivity {
         controller.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
         if (show) holdResumePrompt(true);
         topBar.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
-        btnLock.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
+        showLockButton(show);
         if (show) {
             updateTitle();
             syncPlayButton();
@@ -2581,6 +2582,18 @@ public class PlayerActivity extends AppCompatActivity {
             controller.post(this::wirePlayerFocus);
         }
         applyChromeSystemUi(show);
+    }
+
+    /** 电视不提供锁屏，按钮收起且不可聚焦。 */
+    private void showLockButton(boolean show) {
+        if (btnLock == null) return;
+        if (isTvDevice()) {
+            btnLock.setVisibility(View.GONE);
+            btnLock.setFocusable(false);
+            btnLock.setFocusableInTouchMode(false);
+            return;
+        }
+        btnLock.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
     }
 
     /** 侧边栏打开时收起状态栏，关掉后若菜单栏还在再露出来。 */
@@ -2636,7 +2649,7 @@ public class PlayerActivity extends AppCompatActivity {
             holdResumePrompt(false);
             controller.setVisibility(View.INVISIBLE);
             topBar.setVisibility(View.INVISIBLE);
-            btnLock.setVisibility(View.INVISIBLE);
+            showLockButton(false);
             View panel = findViewById(R.id.morePanel);
             if (panel != null) {
                 ViewGroup.LayoutParams panelLp = panel.getLayoutParams();
@@ -2664,7 +2677,7 @@ public class PlayerActivity extends AppCompatActivity {
             controller.setVisibility(View.VISIBLE);
             holdResumePrompt(true);
             topBar.setVisibility(View.VISIBLE);
-            btnLock.setVisibility(View.VISIBLE);
+            showLockButton(true);
             resetHideTimer();
             applyChromeSystemUi(true);
             controller.post(this::wirePlayerFocus);
