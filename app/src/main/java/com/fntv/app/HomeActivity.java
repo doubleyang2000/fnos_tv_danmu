@@ -393,7 +393,7 @@ public class HomeActivity extends AppCompatActivity {
         tabSettings.setOnFocusChangeListener(onTabFocus);
     }
 
-    /** 底部栏目。电视上焦点移入即切换；再按一次「影视」仍回到首页。 */
+    /** 底部栏目。电视上焦点移入即切换；已在影视页时再点一次刷新当前页，进了子页再点则回到首页。 */
     private void openTab(int index, boolean fromClick) {
         if (tabSwitching) return;
         if (index == 0 && currentTab == 0 && !showingOverview) {
@@ -401,7 +401,8 @@ public class HomeActivity extends AppCompatActivity {
             return;
         }
         if (currentTab == index) {
-            if (fromClick && index == 1) loadMediaLibraries();
+            if (fromClick && index == 0) refreshCurrentPage();
+            else if (fromClick && index == 1) loadMediaLibraries();
             return;
         }
         switchTab(index);
@@ -440,9 +441,11 @@ public class HomeActivity extends AppCompatActivity {
         }
     }
 
-    /** 电视没有底栏，设置在标题栏右侧；手机保持原来的三个底栏按钮。 */
+    /** 电视没有底栏，设置和刷新在标题栏右侧；手机不显示刷新按钮。 */
     private void applyTvHomeChrome() {
         if (!isTelevision()) return;
+        View refresh = findViewById(R.id.btnHomeRefresh);
+        if (refresh != null) refresh.setVisibility(View.VISIBLE);
         View tabBar = findViewById(R.id.tabBar);
         View divider = findViewById(R.id.tabDivider);
         if (tabBar != null) tabBar.setVisibility(View.GONE);
@@ -1639,7 +1642,7 @@ public class HomeActivity extends AppCompatActivity {
         View back = findViewById(R.id.btnLibBack);
         View refresh = findViewById(R.id.btnHomeRefresh);
         if (back != null) back.setVisibility(View.GONE);
-        if (refresh != null) refresh.setVisibility(View.VISIBLE);
+        if (refresh != null) refresh.setVisibility(isTelevision() ? View.VISIBLE : View.GONE);
         View logo = findViewById(R.id.ivHomeLogo);
         if (logo != null) logo.setVisibility(View.VISIBLE);
         if (tvHomeTitle != null) {

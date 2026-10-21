@@ -65,7 +65,7 @@ DPAD 遥控器友好
                     android:layout_height="wrap_content"
                     android:layout_centerVertical="true"
                     android:layout_marginLeft="8dp"
-                    android:layout_marginRight="96dp"
+                    android:layout_marginRight="56dp"
                     android:layout_toRightOf="@id/ivHomeLogo"
                     android:ellipsize="end"
                     android:singleLine="true"
@@ -87,7 +87,8 @@ DPAD 遥控器友好
                     android:focusable="true"
                     android:padding="8dp"
                     android:scaleType="centerInside"
-                    android:src="@drawable/ic_refresh" />
+                    android:src="@drawable/ic_refresh"
+                    android:visibility="gone" />
 
                 <androidx.appcompat.widget.AppCompatImageView
                     android:id="@+id/btnHomeSearch"

@@ -430,18 +430,7 @@ final class SideSheet {
         pinPanel(dialog, widthDp);
         Window window = dialog.getWindow();
         if (window == null) return;
-        View decor = window.getDecorView();
-        decor.post(() -> pinPanel(dialog, widthDp));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            decor.setOnApplyWindowInsetsListener((v, insets) -> {
-                v.post(() -> {
-                    if (!dialog.isShowing()) return;
-                    View panel = sidePanel(dialog);
-                    if (panel != null) applyStatusInset(dialog, panel);
-                });
-                return v.onApplyWindowInsets(insets);
-            });
-        }
+        window.getDecorView().post(() -> pinPanel(dialog, widthDp));
     }
 
     /** 浮窗在电视上只会包住内容。把面板拉到屏幕右侧，从顶到底铺满。 */
@@ -467,7 +456,6 @@ final class SideSheet {
                 if (dialog.isShowing()) dialog.dismiss();
             });
         }
-        applyStatusInset(dialog, panel);
     }
 
     private static View sidePanel(Dialog dialog) {
@@ -477,17 +465,6 @@ final class SideSheet {
         if (!(content instanceof ViewGroup) || ((ViewGroup) content).getChildCount() == 0) return null;
         ViewGroup host = (ViewGroup) content;
         return host.getChildAt(host.getChildCount() - 1);
-    }
-
-    /** 状态栏高度可能晚于第一次布局才就绪，每次钉板都按最新值重设，避免右上角按钮被挡住。 */
-    private static void applyStatusInset(Dialog dialog, View panel) {
-        int inset = statusBarInset(dialog);
-        Object raw = panel.getTag(R.id.status_bar_inset);
-        int applied = raw instanceof Integer ? (Integer) raw : 0;
-        if (applied == inset) return;
-        panel.setPadding(panel.getPaddingLeft(), panel.getPaddingTop() - applied + inset,
-                panel.getPaddingRight(), panel.getPaddingBottom());
-        panel.setTag(R.id.status_bar_inset, inset);
     }
 
     private static ScrollView sheetScroll(Context context) {
@@ -784,44 +761,4 @@ final class SideSheet {
         }
     }
 
-    /** 菜单栏露出状态栏时，侧边栏背景仍铺满，文字下移避开状态栏。 */
-    private static int statusBarInset(Dialog dialog) {
-        if (dialog == null) return 0;
-        Window window = dialog.getWindow();
-        int fromDialog = topSystemInset(window != null ? window.getDecorView() : null);
-        Context context = dialog.getContext();
-        int fromActivity = 0;
-        if (context instanceof android.app.Activity) {
-            fromActivity = topSystemInset(((android.app.Activity) context).getWindow().getDecorView());
-        }
-        int inset = Math.max(fromDialog, fromActivity);
-        if (inset > 0) return inset;
-        if (statusBarHidden(context)) return 0;
-        return statusBarDimen(context);
-    }
-
-    private static int topSystemInset(View decor) {
-        if (decor == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return 0;
-        android.view.WindowInsets insets = decor.getRootWindowInsets();
-        if (insets == null || !insets.isVisible(android.view.WindowInsets.Type.statusBars())) return 0;
-        return insets.getInsetsIgnoringVisibility(
-                android.view.WindowInsets.Type.statusBars()
-                        | android.view.WindowInsets.Type.displayCutout()).top;
-    }
-
-    private static boolean statusBarHidden(Context context) {
-        if (!(context instanceof android.app.Activity)) return false;
-        View decor = ((android.app.Activity) context).getWindow().getDecorView();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            android.view.WindowInsets insets = decor.getRootWindowInsets();
-            if (insets != null) return !insets.isVisible(android.view.WindowInsets.Type.statusBars());
-        }
-        return (decor.getSystemUiVisibility() & View.SYSTEM_UI_FLAG_FULLSCREEN) != 0;
-    }
-
-    private static int statusBarDimen(Context context) {
-        if (context == null) return 0;
-        int resId = context.getResources().getIdentifier("status_bar_height", "dimen", "android");
-        return resId > 0 ? context.getResources().getDimensionPixelSize(resId) : 0;
-    }
 }
