@@ -260,6 +260,7 @@ final class SideSheet {
         chip.setFocusable(true);
         chip.setFocusableInTouchMode(true);
         chip.setClickable(true);
+        chip.setSelected(selected);
         chip.setTag(new Click(listener, index));
         chip.setOnFocusChangeListener((v, hasFocus) ->
                 v.setBackground(stroke(density, selected, hasFocus)));
@@ -318,6 +319,7 @@ final class SideSheet {
         card.setFocusable(true);
         card.setFocusableInTouchMode(true);
         card.setClickable(true);
+        card.setSelected(selected);
         card.setTag(new Click(listener, index));
         card.setOnFocusChangeListener((v, hasFocus) ->
                 v.setBackground(stroke(density, selected, hasFocus)));
@@ -476,7 +478,7 @@ final class SideSheet {
         return scroll;
     }
 
-    /** 打开后把焦点放进第一条，并串起上下左右，避免停在滚动容器上。 */
+    /** 打开后焦点落在当前勾选项；没有勾选时放进第一条。 */
     static void focus(Dialog dialog) {
         if (dialog == null || dialog.getWindow() == null) return;
         track(dialog);
@@ -710,13 +712,28 @@ final class SideSheet {
             }
             for (java.util.ArrayList<View> row : rows) TvFocus.sealAll(row);
             if (!tv) return;
-            View first = body.findViewWithTag("skip_focus");
-            if (first == null || !items.contains(first)) first = items.get(0);
-            if (!first.requestFocus()) first.post(first::requestFocus);
-            View target = first;
-            target.post(() -> {
-                if (!target.isFocused()) target.requestFocus();
-            });
+            focusInitial(initialSheetFocus(body, items));
+    }
+
+    /** 片头尾用 skip_focus 指定入口。其余侧边栏落在当前勾选的那一项。 */
+    private static View initialSheetFocus(View body, java.util.List<View> items) {
+        View marked = body.findViewWithTag("skip_focus");
+        if (marked != null && items.contains(marked)) return marked;
+        for (View item : items) {
+            if (item.isSelected()) return item;
+        }
+        return items.get(0);
+    }
+
+    private static void focusInitial(View target) {
+        if (target == null) return;
+        if (!target.requestFocus()) target.post(target::requestFocus);
+        target.post(() -> {
+            if (!target.isFocused()) target.requestFocus();
+            int w = Math.max(target.getWidth(), 1);
+            int h = Math.max(target.getHeight(), 1);
+            target.requestRectangleOnScreen(new android.graphics.Rect(0, 0, w, h), true);
+        });
     }
 
     /** 片头尾这类全宽竖排选项：还没量出不同 Y 时，不要当成横排。 */
