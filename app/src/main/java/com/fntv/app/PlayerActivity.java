@@ -56,6 +56,13 @@ public class PlayerActivity extends AppCompatActivity {
     private boolean playInfoReady;
     private int playInfoGen;
     private float playbackSpeed = 1.0f;
+    /** 这一次已经手动选过倍速，后面拿到剧名也不再覆盖。 */
+    private boolean speedPicked;
+    /** 已经套用过的倍速记忆键，避免同一部剧重复读。 */
+    private String appliedSpeedKey;
+    private boolean nextEpCountdownRunning;
+    private int nextEpCountdownLeft;
+    private final Runnable nextEpCountdownTick = this::tickNextEpisodeCountdown;
     private boolean speedBoost;
     private Runnable pendingOutroSkip;
     private DanmuView danmuView;
@@ -152,6 +159,7 @@ public class PlayerActivity extends AppCompatActivity {
         skipMarks = findViewById(R.id.skipMarks);
         btnPlayPause = findViewById(R.id.btnPlayPause);
         btnSpeed = findViewById(R.id.btnSpeed);
+        restoreSeriesSpeed();
         btnInfo = findViewById(R.id.btnInfo);
         btnQuality = findViewById(R.id.btnQuality);
         btnCloseInfo = findViewById(R.id.btnCloseInfo);
@@ -253,7 +261,8 @@ public class PlayerActivity extends AppCompatActivity {
                                 speedBoost = true;
                                 applyPlaybackSpeed();
                                 showCtrl(false);
-                                if (tvSpeedHint != null) {
+                                if (tvSpeedHint != null && !nextEpCountdownRunning) {
+                                    tvSpeedHint.setText("倍速播放中");
                                     tvSpeedHint.setVisibility(View.VISIBLE);
                                 }
                             }
@@ -300,7 +309,7 @@ public class PlayerActivity extends AppCompatActivity {
                                 speedBoost = false;
                                 applyPlaybackSpeed();
                             }
-                            if (tvSpeedHint != null) {
+                            if (tvSpeedHint != null && !nextEpCountdownRunning) {
                                 tvSpeedHint.setVisibility(View.GONE);
                             }
                             return true;
@@ -372,6 +381,7 @@ public class PlayerActivity extends AppCompatActivity {
                 skipIntroDirty = false;
                 skipOutroDirty = false;
                 cancelPendingOutroSkip();
+                cancelNextEpisodeCountdown();
                 hideResumePrompt(false);
                 if (danmuManager != null) danmuManager.setHoldStatus(true);
                 itemGuid = guid;
@@ -494,7 +504,7 @@ public class PlayerActivity extends AppCompatActivity {
         if (savedBright != 100) applyBrightness(savedBright);
         applyHdrMode();
         btnEpisodeList.setOnClickListener(v -> episodeManager.showPicker());
-        btnNextEp.setOnClickListener(v -> episodeManager.playNext());
+        btnNextEp.setOnClickListener(v -> playPendingNextEpisode());
 
         cloudStreamManager = new CloudStreamManager(new CloudStreamManager.Callback() {
             @Override public String getBaseUrl() { return baseUrl; }
@@ -592,6 +602,7 @@ public class PlayerActivity extends AppCompatActivity {
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {
                 if (fromUser && player != null) {
+                    cancelNextEpisodeCountdown();
                     resetHideTimer();
                     // 立即更新 UI（时间显示）
                     tvTime.setText(playClock(p, player.getDuration()));
@@ -845,7 +856,7 @@ public class PlayerActivity extends AppCompatActivity {
                     saveProgress(true);
                     stopSave();
                     if (episodeManager != null && episodeManager.hasNext()) {
-                        episodeManager.playNext();
+                        offerNextEpisodeCountdown();
                     }
                 } else {
                     noteProgress();
@@ -869,9 +880,7 @@ public class PlayerActivity extends AppCompatActivity {
                         && (e.getMessage().contains("MediaCodecVideoRenderer")
                             || e.getMessage().contains("MediaCodecAudioRenderer"))) {
                     swDecoderTried = true;
-                    Log.d(TAG, "硬解失败，切换到软解重试");
-                    getSharedPreferences("fntv_prefs", MODE_PRIVATE)
-                            .edit().putString("decoder_mode", "software").apply();
+                    Log.d(TAG, "硬解失败，仅本次播放切到软解");
                     isHwDecode = false;
                     handler.post(() -> recreatePlayerWithSwDecoder());
                     return;
@@ -957,6 +966,7 @@ public class PlayerActivity extends AppCompatActivity {
                     subtitleGuid = info.subtitleGuid != null ? info.subtitleGuid : "_no_display_";
                     if (info.item != null && info.item.tvTitle != null) itemTV = info.item.tvTitle;
                     if (info.item != null) itemTitle = info.item.title;
+                    restoreSeriesSpeed();
                     applyServerSkip(info.playConfig);
                     if (info.item != null && info.item.seasonNumber > 0) seasonNumber = info.item.seasonNumber;
                     if (info.item != null) getIntent().putExtra("episode_number", info.item.episodeNumber);
@@ -1104,7 +1114,7 @@ public class PlayerActivity extends AppCompatActivity {
                     noteProgress();
                     saveProgress(true);
                     stopSave();
-                    if (episodeManager != null && episodeManager.hasNext()) episodeManager.playNext();
+                    if (episodeManager != null && episodeManager.hasNext()) offerNextEpisodeCountdown();
                 } else {
                     noteProgress();
                     saveProgress(false);
@@ -1140,6 +1150,7 @@ public class PlayerActivity extends AppCompatActivity {
     // ========== 控制 ==========
 
     private void togglePlay() {
+        if (nextEpCountdownRunning) cancelNextEpisodeCountdown();
         if (player == null) return;
         if (player.isPlaying()) {
             player.pause();
@@ -1154,6 +1165,7 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     private void seekRel(int ms) {
+        if (nextEpCountdownRunning) cancelNextEpisodeCountdown();
         if (player == null) return;
         long p = Math.max(0, Math.min(player.getDuration(), player.getCurrentPosition() + ms));
         player.seekTo(p);
@@ -1304,9 +1316,119 @@ public class PlayerActivity extends AppCompatActivity {
             speedIdx = which;
             playbackSpeed = speeds[which];
             speedBoost = false;
+            speedPicked = true;
+            rememberSeriesSpeed();
             refreshSpeedLabel();
             applyPlaybackSpeed();
         });
+    }
+
+    /** 一部剧共用一个倍速。电影没有剧名时按这一部自己记住。 */
+    private String speedMemoryKey() {
+        if (itemTV != null && !itemTV.isEmpty()
+                && parentGuid != null && !parentGuid.isEmpty()) {
+            return "tv:" + itemTV;
+        }
+        if (parentGuid != null && !parentGuid.isEmpty()) return "p:" + parentGuid;
+        if (itemGuid != null && !itemGuid.isEmpty()) return "i:" + itemGuid;
+        return null;
+    }
+
+    private void restoreSeriesSpeed() {
+        String key = speedMemoryKey();
+        if (key == null || key.equals(appliedSpeedKey)) return;
+        if (speedPicked) {
+            appliedSpeedKey = key;
+            rememberSeriesSpeed();
+            return;
+        }
+        appliedSpeedKey = key;
+        float saved = getSharedPreferences("fntv_prefs", MODE_PRIVATE)
+                .getFloat("series_speed_" + key, 1f);
+        int idx = 2;
+        float best = 1f;
+        float bestDiff = Float.MAX_VALUE;
+        for (int i = 0; i < speeds.length; i++) {
+            float diff = Math.abs(speeds[i] - saved);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                best = speeds[i];
+                idx = i;
+            }
+        }
+        speedIdx = idx;
+        playbackSpeed = best;
+        refreshSpeedLabel();
+        applyPlaybackSpeed();
+    }
+
+    private void rememberSeriesSpeed() {
+        String key = speedMemoryKey();
+        if (key == null) return;
+        appliedSpeedKey = key;
+        getSharedPreferences("fntv_prefs", MODE_PRIVATE)
+                .edit().putFloat("series_speed_" + key, playbackSpeed).apply();
+    }
+
+    /** 这一集放到结尾后，倒计时再进下一集。返回、拖动或暂停都会取消。 */
+    private void offerNextEpisodeCountdown() {
+        if (nextEpCountdownRunning) return;
+        if (episodeManager == null || !episodeManager.hasNext()) return;
+        nextEpCountdownRunning = true;
+        nextEpCountdownLeft = 5;
+        if (tvSpeedHint != null) {
+            tvSpeedHint.setClickable(true);
+            tvSpeedHint.setFocusable(false);
+            tvSpeedHint.setOnClickListener(v -> cancelNextEpisodeCountdown());
+            tvSpeedHint.bringToFront();
+        }
+        handler.removeCallbacks(nextEpCountdownTick);
+        tickNextEpisodeCountdown();
+    }
+
+    private void tickNextEpisodeCountdown() {
+        if (!nextEpCountdownRunning) return;
+        if (episodeManager == null || !episodeManager.hasNext()) {
+            cancelNextEpisodeCountdown();
+            return;
+        }
+        if (nextEpCountdownLeft <= 0) {
+            playPendingNextEpisode();
+            return;
+        }
+        if (tvSpeedHint != null) {
+            tvSpeedHint.setText(nextEpCountdownLeft + " 秒后播放下一集");
+            tvSpeedHint.setVisibility(View.VISIBLE);
+        }
+        nextEpCountdownLeft--;
+        handler.postDelayed(nextEpCountdownTick, 1000);
+    }
+
+    private void playPendingNextEpisode() {
+        nextEpCountdownRunning = false;
+        handler.removeCallbacks(nextEpCountdownTick);
+        hideNextEpisodeCountdown();
+        if (episodeManager != null) episodeManager.playNext();
+    }
+
+    private void cancelNextEpisodeCountdown() {
+        if (!nextEpCountdownRunning) return;
+        nextEpCountdownRunning = false;
+        handler.removeCallbacks(nextEpCountdownTick);
+        hideNextEpisodeCountdown();
+    }
+
+    private void hideNextEpisodeCountdown() {
+        if (tvSpeedHint == null) return;
+        tvSpeedHint.setOnClickListener(null);
+        tvSpeedHint.setClickable(false);
+        if (speedBoost) {
+            tvSpeedHint.setText("倍速播放中");
+            tvSpeedHint.setVisibility(View.VISIBLE);
+            return;
+        }
+        tvSpeedHint.setText("倍速播放中");
+        tvSpeedHint.setVisibility(View.GONE);
     }
 
     /** 把当前倍速写进播放器。长按加速时暂时用 2 倍，松手回到用户选的倍速。 */
@@ -3143,6 +3265,18 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     @Override public boolean onKeyDown(int k, KeyEvent e) {
+        if (nextEpCountdownRunning
+                && (episodeManager == null || !episodeManager.isPickerShowing())) {
+            if (k == KeyEvent.KEYCODE_BACK || k == KeyEvent.KEYCODE_ESCAPE) {
+                cancelNextEpisodeCountdown();
+                return true;
+            }
+            if (k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER
+                    || k == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                playPendingNextEpisode();
+                return true;
+            }
+        }
         if (episodeManager != null && episodeManager.isPickerShowing()) {
             if (k == KeyEvent.KEYCODE_BACK || k == KeyEvent.KEYCODE_ESCAPE) {
                 episodeManager.dismissPicker();

@@ -4836,7 +4836,8 @@ public class HomeActivity extends AppCompatActivity {
             if (newF != null) TvFocus.remember(newF);
             if (newF == null || isTabBar(newF) || !newF.isShown() || holdRememberedFocus) return;
             // 内容被拆掉时焦点会掉到刷新上，不能把离开前的位置冲掉
-            if (isHomeHeader(newF) && !headerFocusedByUser) return;
+            if (isHomeHeader(newF)) return;
+            headerFocusedByUser = false;
             lastContentFocus = newF;
             rememberFocusSection(newF);
         });
@@ -4911,7 +4912,7 @@ public class HomeActivity extends AppCompatActivity {
         if (!isTabBar(next) && !isInCurrentPanel(next) && !isHomeHeader(next)) {
             return true;
         }
-        if (isHomeHeader(next)) headerFocusedByUser = true;
+        headerFocusedByUser = isHomeHeader(next);
         focusOn(next);
         return true;
     }
@@ -5227,6 +5228,8 @@ public class HomeActivity extends AppCompatActivity {
         if (focused != null && container != null && isDescendantOf(focused, container)) {
             page.focus = focused;
         }
+        // 先把焦点移走再拆内容，否则系统会把焦点落到刷新按钮上
+        if (container != null) parkFocusOutside(container);
         if (container == null) return page;
         while (container.getChildCount() > 0) {
             View child = container.getChildAt(0);
@@ -5285,6 +5288,8 @@ public class HomeActivity extends AppCompatActivity {
         showingOverview = page.container == moviesContainer
                 ? page.overview
                 : (page.under != null && page.under.overview);
+        if (showingOverview) headerFocusedByUser = false;
+        if (showingOverview && isTelevision()) restoreParkedOverviewFocus(page.focus);
         revealTab(page.tab);
         syncHomeSwipe();
         suppressBrowseAutoFocus = true;
@@ -5320,19 +5325,11 @@ public class HomeActivity extends AppCompatActivity {
         clearLibraryBrowseHeader();
         showingOverview = true;
         overviewBuilt = true;
+        headerFocusedByUser = false;
         attachPage(page);
         syncHomeSwipe();
         wireOverviewFocus();
-        if (isTelevision()) {
-            View parked = page.focus;
-            runBeforeDraw(page.container, () -> {
-                View target = isUsableFocus(parked) ? parked : restoreInRememberedSection();
-                if (!isUsableFocus(target)) return;
-                requestFocusQuiet(target);
-                homeEntryFocused = true;
-                initialFocusPlaced = true;
-            });
-        }
+        if (isTelevision()) restoreParkedOverviewFocus(page.focus);
         return true;
     }
 
@@ -5875,6 +5872,34 @@ public class HomeActivity extends AppCompatActivity {
             return false;
         }
         return moveExplicitFocus(focused, keyCode);
+    }
+
+    /** 回到首页后多试几次，直到焦点落到离开前的那一项，而不是刷新按钮。 */
+    private void restoreParkedOverviewFocus(View parked) {
+        if (moviesContainer == null) return;
+        android.view.ViewTreeObserver obs = moviesContainer.getViewTreeObserver();
+        obs.addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+            int tries;
+
+            @Override
+            public boolean onPreDraw() {
+                tries++;
+                View target = isUsableFocus(parked) && !isHomeHeader(parked)
+                        ? parked : restoreInRememberedSection();
+                boolean placed = false;
+                if (isUsableFocus(target) && !isHomeHeader(target)) {
+                    requestFocusQuiet(target);
+                    placed = target.isFocused();
+                    if (placed) {
+                        homeEntryFocused = true;
+                        initialFocusPlaced = true;
+                        headerFocusedByUser = false;
+                    }
+                }
+                if ((placed || tries > 4) && obs.isAlive()) obs.removeOnPreDrawListener(this);
+                return placed || tries > 4;
+            }
+        });
     }
 
     /** 画出这一帧之前执行，避免先画到刷新按钮再跳走。 */

@@ -1,7 +1,7 @@
 {
-    "versionCode": 9527035,
-    "versionName": "9527.035",
-    "apkUrl": "https://ghfast.top/https://github.com/lxlry/fnos_tv_danmu/releases/download/9527.035/FNTV_release_v9527.035.apk",
-    "changelog": "使用体验优化",
+    "versionCode": 9527036,
+    "versionName": "9527.036",
+    "apkUrl": "https://ghfast.top/https://github.com/lxlry/fnos_tv_danmu/releases/download/9527.036/FNTV_release_v9527.036.apk",
+    "changelog": "倍速按一部剧记住；播完下一集先倒计时；硬解失败只影响这一次播放",
     "forceUpdate": false
 }
