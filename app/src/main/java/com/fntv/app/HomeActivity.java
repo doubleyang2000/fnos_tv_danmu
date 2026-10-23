@@ -5889,7 +5889,7 @@ public class HomeActivity extends AppCompatActivity {
                 boolean placed = false;
                 if (isUsableFocus(target) && !isHomeHeader(target)) {
                     requestFocusQuiet(target);
-                    placed = target.isFocused();
+                    placed = getCurrentFocus() == target;
                     if (placed) {
                         homeEntryFocused = true;
                         initialFocusPlaced = true;
@@ -5917,9 +5917,10 @@ public class HomeActivity extends AppCompatActivity {
 
     /** 只移焦点，不让滚动容器把列表拽到卡片位置。 */
     private void requestFocusQuiet(View target) {
-        if (!isUsableFocus(target) || target.isFocused()) return;
+        if (!isUsableFocus(target) || getCurrentFocus() == target) return;
         ScrollView scroller = findVerticalScroller(target);
         if (scroller != null) holdScroller(scroller, true);
+        if (target.isFocused()) target.clearFocus();
         target.requestFocus();
         if (scroller != null && pendingHomeAnchor < 0) {
             scroller.post(() -> holdScroller(scroller, false));

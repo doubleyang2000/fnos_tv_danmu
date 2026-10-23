@@ -13,6 +13,8 @@ public class HomeScrollView extends ScrollView {
     private float startY;
     private boolean horizontal;
     private boolean holdScroll;
+    /** 焦点交还给内容时，不要跟着把列表滚走。 */
+    private boolean suppressScroll;
 
     public HomeScrollView(Context context) {
         this(context, null);
@@ -32,8 +34,33 @@ public class HomeScrollView extends ScrollView {
 
     @Override
     public void requestChildFocus(android.view.View child, android.view.View focused) {
-        if (holdScroll) return;
-        super.requestChildFocus(child, focused);
+        if (!holdScroll) {
+            super.requestChildFocus(child, focused);
+            return;
+        }
+        // 仍然把窗口焦点交出去。只拦住随之而来的滚动，否则海报会亮、方向键还停在刷新上。
+        suppressScroll = true;
+        try {
+            super.requestChildFocus(child, focused);
+        } finally {
+            suppressScroll = false;
+        }
+    }
+
+    @Override
+    public void scrollTo(int x, int y) {
+        if (suppressScroll) return;
+        super.scrollTo(x, y);
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        int x = getScrollX();
+        int y = getScrollY();
+        super.onLayout(changed, l, t, r, b);
+        if (holdScroll && (getScrollX() != x || getScrollY() != y)) {
+            super.scrollTo(x, y);
+        }
     }
 
     /** 恢复滚动位置时，焦点不要再把列表拽走。 */
