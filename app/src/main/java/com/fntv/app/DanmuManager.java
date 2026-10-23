@@ -418,7 +418,7 @@ public class DanmuManager {
         dialog.show();
     }
 
-    /** 设置项按界面顺序上下走。滑条左右仍调数值，避免从下面往上时对不上。 */
+    /** 设置项按界面顺序上下走。滑条左右仍调数值。 */
     private void wireDanmuSettingsFocus(android.app.Dialog dialog) {
         java.util.ArrayList<View> items = new java.util.ArrayList<>();
         addDanmuFocus(items, dialog.findViewById(R.id.dm_settings_reset));
@@ -442,6 +442,14 @@ public class DanmuManager {
         addDanmuFocus(items, dialog.findViewById(R.id.dm_custom_fps));
         addDanmuSlider(items, dialog, R.id.dm_fps);
         TvFocus.bindChain(items);
+        View content = dialog.findViewById(android.R.id.content);
+        if (content instanceof ViewGroup && ((ViewGroup) content).getChildCount() > 0) {
+            View sheet = ((ViewGroup) content).getChildAt(0);
+            if (sheet instanceof android.widget.ScrollView) {
+                sheet.setFocusable(false);
+                sheet.setFocusableInTouchMode(false);
+            }
+        }
     }
 
     private void addDanmuFocus(java.util.List<View> items, View view) {
@@ -451,8 +459,31 @@ public class DanmuManager {
     private void addDanmuSlider(java.util.List<View> items, android.app.Dialog dialog, int id) {
         View root = dialog.findViewById(id);
         if (root == null) return;
-        View bar = root.findViewById(R.id.dm_seekbar);
-        if (bar != null) items.add(bar);
+        View bar = sliderBar(root);
+        if (bar != null) {
+            // 布局里每条滑条都是 dm_seekbar。焦点按 id 查找，重复 id 会全部指到第一条，上下就不动了。
+            bar.setId(View.generateViewId());
+            items.add(bar);
+        }
+    }
+
+    private SeekBar sliderBar(View root) {
+        if (!(root instanceof ViewGroup)) return null;
+        View byId = root.findViewById(R.id.dm_seekbar);
+        if (byId instanceof SeekBar) return (SeekBar) byId;
+        return findSeekBar((ViewGroup) root);
+    }
+
+    private SeekBar findSeekBar(ViewGroup group) {
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child instanceof SeekBar) return (SeekBar) child;
+            if (child instanceof ViewGroup) {
+                SeekBar nested = findSeekBar((ViewGroup) child);
+                if (nested != null) return nested;
+            }
+        }
+        return null;
     }
 
     /** 按当前控件立刻保存并作用到画面，不用再点确定。 */
@@ -560,7 +591,7 @@ public class DanmuManager {
     private void setSliderValue(android.app.Dialog d, int id, int val, int min) {
         ViewGroup v = d.findViewById(id);
         if (v == null) return;
-        SeekBar sb = v.findViewById(R.id.dm_seekbar);
+        SeekBar sb = sliderBar(v);
         if (sb != null) sb.setProgress(val - min);
     }
 
@@ -568,7 +599,7 @@ public class DanmuManager {
         ViewGroup v = d.findViewById(id);
         if (v == null) return;
         TextView tv = v.findViewById(R.id.dm_label);
-        SeekBar sb = v.findViewById(R.id.dm_seekbar);
+        SeekBar sb = sliderBar(v);
         if (tv != null) {
             String display = String.valueOf(val);
             if (unit.equals("x")) display = String.format("%.1f", val / 100f);
@@ -726,7 +757,8 @@ public class DanmuManager {
     }
 
     private int readSlider(android.app.Dialog d, int id, int min) {
-        SeekBar sb = d.findViewById(id).findViewById(R.id.dm_seekbar);
+        View root = d.findViewById(id);
+        SeekBar sb = sliderBar(root);
         return sb != null ? sb.getProgress() + min : min;
     }
 
