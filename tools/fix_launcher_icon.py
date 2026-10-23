@@ -114,17 +114,19 @@ def write_tv_banner(squircle):
     bg.paste(icon, (24, (h - 118) // 2), icon)
     draw = ImageDraw.Draw(bg)
     font = None
-    for path in (
-        r"C:\Windows\Fonts\segoeuib.ttf",
-        r"C:\Windows\Fonts\arialbd.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    for path, size in (
+        (r"C:\Windows\Fonts\msyhbd.ttc", 36),
+        (r"C:\Windows\Fonts\msyh.ttc", 36),
+        (r"C:\Windows\Fonts\segoeuib.ttf", 42),
+        (r"C:\Windows\Fonts\arialbd.ttf", 42),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42),
     ):
         if os.path.isfile(path):
-            font = ImageFont.truetype(path, 42)
+            font = ImageFont.truetype(path, size)
             break
     if font is None:
         font = ImageFont.load_default()
-    draw.text((156, 90), "FN TV", font=font, fill=(255, 255, 255, 255), anchor="lm")
+    draw.text((156, 90), "肥牛 TV", font=font, fill=(255, 255, 255, 255), anchor="lm")
     out = bg.convert("RGB")
     save(out, os.path.join(RES, "drawable", "tv_banner.png"))
     save(out, os.path.join(RES, "drawable-xhdpi", "tv_banner.png"))

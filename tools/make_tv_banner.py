@@ -29,14 +29,16 @@ def main():
     banner_rgba.paste(icon, (20, 26), icon)
 
     draw = ImageDraw.Draw(banner_rgba)
-    font_path = "C:/Windows/Fonts/segoeuib.ttf"
+    font_path = "C:/Windows/Fonts/msyhbd.ttc"
+    if not os.path.isfile(font_path):
+        font_path = "C:/Windows/Fonts/segoeuib.ttf"
     if not os.path.isfile(font_path):
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     try:
         title = ImageFont.truetype(font_path, 36)
     except OSError:
         title = ImageFont.load_default()
-    draw.text((164, 68), "FN TV", fill=(244, 246, 248, 255), font=title)
+    draw.text((164, 68), "肥牛 TV", fill=(244, 246, 248, 255), font=title)
 
     out = banner_rgba.convert("RGB")
     for d in OUT_DIRS:

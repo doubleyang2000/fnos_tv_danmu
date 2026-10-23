@@ -3,6 +3,7 @@ package com.fntv.app;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.ViewGroup;
@@ -40,23 +41,44 @@ public class SeekQuarterMarks extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
-        int left = 0;
-        int right = getWidth();
-        ViewParent parent = getParent();
-        if (parent instanceof ViewGroup) {
-            View bar = ((ViewGroup) parent).findViewById(R.id.dm_seekbar);
-            if (bar instanceof SeekBar && bar.getWidth() > 0) {
-                left = bar.getPaddingLeft();
-                right = bar.getWidth() - bar.getPaddingRight();
-            }
-        }
-        if (right <= left) return;
-        float cy = getHeight() / 2f;
+        SeekBar bar = siblingSeekBar();
+        if (bar == null || bar.getWidth() <= 0) return;
+        float originX = bar.getLeft() - getLeft();
+        float originY = bar.getTop() - getTop();
+        float cy = originY + (bar.getHeight() + bar.getPaddingTop() - bar.getPaddingBottom()) / 2f;
         float radius = 3f * getResources().getDisplayMetrics().density;
-        float span = right - left;
         for (float fraction : fractions) {
-            float x = left + span * fraction;
-            canvas.drawCircle(x, cy, radius, paint);
+            float clamped = fraction < 0f ? 0f : (fraction > 1f ? 1f : fraction);
+            canvas.drawCircle(originX + thumbCenterX(bar, clamped), cy, radius, paint);
         }
+    }
+
+    /** 同一条滑条上的 SeekBar。不能按 dm_seekbar 找，焦点链会改掉这个 id。 */
+    private SeekBar siblingSeekBar() {
+        ViewParent parent = getParent();
+        if (!(parent instanceof ViewGroup)) return null;
+        ViewGroup group = (ViewGroup) parent;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child instanceof SeekBar) return (SeekBar) child;
+        }
+        return null;
+    }
+
+    /** 与 AbsSeekBar 滑块中心同一套位移，节点才会落在圆点上。 */
+    private float thumbCenterX(SeekBar bar, float fraction) {
+        int padL = bar.getPaddingLeft();
+        int padR = bar.getPaddingRight();
+        int span = bar.getWidth() - padL - padR;
+        int thumbW = 0;
+        Drawable thumb = bar.getThumb();
+        if (thumb != null) {
+            thumbW = thumb.getIntrinsicWidth();
+            if (thumbW <= 0) thumbW = thumb.getBounds().width();
+        }
+        if (thumbW <= 0 || span <= 0) return padL + span * fraction;
+        int offset = bar.getThumbOffset();
+        int travel = span - thumbW + offset * 2;
+        return padL - offset + travel * fraction + thumbW / 2f;
     }
 }
