@@ -1878,20 +1878,37 @@ public class PlayerActivity extends AppCompatActivity {
         custom.setTag("skip_custom");
         root.addView(custom);
         focusSkipPage(dialog);
-        skipSheetBody.post(() -> wireSkipEditorFocus(position, custom));
+        // 侧边栏会再绑一次焦点，晚一拍盖住它，否则上键到不了重置。
+        skipSheetBody.post(() -> skipSheetBody.post(() -> wireSkipEditorFocus(position, custom)));
     }
 
-    /** 片头/片尾设置页：选项竖排，只用上下键。 */
+    /** 片头/片尾设置页：正文上下移动，顶栏返回和重置左右互切。 */
     private void wireSkipEditorFocus(View position, View custom) {
-        if (position == null || custom == null) return;
-        java.util.List<View> upper = java.util.Collections.singletonList(position);
-        java.util.List<View> lower = java.util.Collections.singletonList(custom);
-        TvFocus.bindVertical(upper, lower);
+        if (position == null || custom == null || !position.isAttachedToWindow()) return;
+        View back = skipSheetBody != null ? skipSheetBody.findViewWithTag("skip_back") : null;
+        View reset = skipSheetBody != null ? skipSheetBody.findViewWithTag("skip_reset") : null;
+        java.util.List<View> header = new java.util.ArrayList<>();
+        if (back != null && back.isFocusable()) header.add(back);
+        if (reset != null && reset.isFocusable()) header.add(reset);
+        TvFocus.bindVertical(java.util.Collections.singletonList(position),
+                java.util.Collections.singletonList(custom));
         TvFocus.point(position, View.FOCUS_LEFT, position);
         TvFocus.point(position, View.FOCUS_RIGHT, position);
         TvFocus.point(custom, View.FOCUS_LEFT, custom);
         TvFocus.point(custom, View.FOCUS_RIGHT, custom);
-        TvFocus.sealAll(java.util.Arrays.asList(position, custom));
+        TvFocus.point(custom, View.FOCUS_DOWN, custom);
+        if (header.isEmpty()) {
+            TvFocus.point(position, View.FOCUS_UP, position);
+        } else {
+            TvFocus.bindRow(header);
+            TvFocus.bindVertical(header, java.util.Collections.singletonList(position));
+            for (View h : header) TvFocus.point(h, View.FOCUS_UP, h);
+        }
+        java.util.List<View> all = new java.util.ArrayList<>();
+        all.add(position);
+        all.add(custom);
+        all.addAll(header);
+        TvFocus.sealAll(all);
     }
 
     private int playheadSeconds() {
@@ -1977,7 +1994,23 @@ public class PlayerActivity extends AppCompatActivity {
         actions.addView(ok, new LinearLayout.LayoutParams(0, dpPx(44), 1));
         root.addView(actions);
         focusSkipPage(dialog);
-        skipSheetBody.post(() -> wireTimeWheels(minutes, seconds, ok));
+        skipSheetBody.post(() -> skipSheetBody.post(() ->
+                wireSkipCustomFocus(minutes, seconds, reset, ok)));
+    }
+
+    /** 自定义时长：滚轮左右互切，底部重置和确定左右互切，上键回到滚轮。 */
+    private void wireSkipCustomFocus(android.widget.NumberPicker minutes,
+            android.widget.NumberPicker seconds, View reset, View ok) {
+        if ((minutes != null && !minutes.isAttachedToWindow())
+                || (seconds != null && !seconds.isAttachedToWindow())) return;
+        wireTimeWheels(minutes, seconds, ok);
+        if (reset == null || ok == null) return;
+        java.util.List<View> actions = java.util.Arrays.asList(reset, ok);
+        TvFocus.bindRow(actions);
+        java.util.List<View> wheels = TvFocus.present(minutes, seconds);
+        if (!wheels.isEmpty()) TvFocus.bindUpToNearest(actions, wheels);
+        for (View v : actions) TvFocus.point(v, View.FOCUS_DOWN, v);
+        TvFocus.sealAll(actions);
     }
 
     /** 滚轮左右只互切，上下改数值；确认键再落到确定。 */
@@ -2124,8 +2157,10 @@ public class PlayerActivity extends AppCompatActivity {
         row.addView(heading);
         if (reset != null) {
             Button resetBtn = skipTextButton("重置");
+            resetBtn.setTag("skip_reset");
             resetBtn.setMinHeight(dpPx(36));
             resetBtn.setMinimumHeight(dpPx(36));
+            resetBtn.setFocusableInTouchMode(isTvDevice());
             LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, dpPx(36));
             resetBtn.setLayoutParams(resetLp);
@@ -2232,7 +2267,7 @@ public class PlayerActivity extends AppCompatActivity {
         btn.setPadding(dpPx(8), 0, dpPx(8), 0);
         btn.setBackgroundResource(R.drawable.bg_chip);
         btn.setFocusable(true);
-        btn.setFocusableInTouchMode(false);
+        btn.setFocusableInTouchMode(isTvDevice());
         return btn;
     }
 
