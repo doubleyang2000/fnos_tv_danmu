@@ -132,6 +132,13 @@ final class SideSheet {
     /** 音轨/字幕卡片。没有条目时显示 emptyText。 */
     static void showCards(Context context, String title, String section, List<Choice> choices, int selected,
                           String emptyText, DialogInterface.OnClickListener listener) {
+        showCards(context, title, null, null, section, choices, selected, emptyText, listener);
+    }
+
+    /** 标题栏右侧带动作按钮的卡片列表（字幕列表右上角挂「字号」）。 */
+    static void showCards(Context context, String title, String actionText, HeaderAction action,
+                          String section, List<Choice> choices, int selected,
+                          String emptyText, DialogInterface.OnClickListener listener) {
         float density = context.getResources().getDisplayMetrics().density;
         LinearLayout body = new LinearLayout(context);
         body.setOrientation(LinearLayout.VERTICAL);
@@ -156,10 +163,20 @@ final class SideSheet {
                 body.addView(trackCard(context, choices.get(i), i == selected, i, listener));
             }
         }
-        showPanel(context, title, 360, body);
+        showPanel(context, title, 360, body, actionText, action);
+    }
+
+    /** 标题栏右侧动作按钮的回调，拿到 dialog 便于换页或再开下级。 */
+    interface HeaderAction {
+        void onClick(Dialog dialog);
     }
 
     private static void showPanel(Context context, String title, int widthDp, View body) {
+        showPanel(context, title, widthDp, body, null, null);
+    }
+
+    private static void showPanel(Context context, String title, int widthDp, View body,
+                                  String actionText, HeaderAction action) {
         Dialog dialog = new Dialog(context, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar);
         dialog.setCanceledOnTouchOutside(true);
         float density = context.getResources().getDisplayMetrics().density;
@@ -169,6 +186,10 @@ final class SideSheet {
         root.setBackgroundColor(0xF0121212);
         root.setPadding(pad, pad, pad, pad);
 
+        LinearLayout head = new LinearLayout(context);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+
         TextView heading = new TextView(context);
         heading.setText(title);
         heading.setTextColor(Color.WHITE);
@@ -176,7 +197,31 @@ final class SideSheet {
         heading.setTypeface(Typeface.DEFAULT_BOLD);
         heading.setIncludeFontPadding(false);
         heading.setPadding(0, 0, 0, (int) (4 * density));
-        root.addView(heading);
+        head.addView(heading, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button actionBtn = null;
+        if (actionText != null && action != null) {
+            actionBtn = new Button(context);
+            actionBtn.setAllCaps(false);
+            actionBtn.setText(actionText);
+            actionBtn.setTextColor(0xFF81C784);
+            actionBtn.setTextSize(13);
+            actionBtn.setBackgroundResource(R.drawable.bg_player_action);
+            actionBtn.setMinWidth(0);
+            actionBtn.setMinHeight(0);
+            actionBtn.setFocusable(true);
+            actionBtn.setClickable(true);
+            actionBtn.setPadding((int) (12 * density), 0, (int) (12 * density), 0);
+            LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, (int) (34 * density));
+            btnLp.bottomMargin = (int) (4 * density);
+            actionBtn.setLayoutParams(btnLp);
+            final HeaderAction act = action;
+            actionBtn.setOnClickListener(v -> act.onClick(dialog));
+            head.addView(actionBtn);
+        }
+        root.addView(head);
 
         View line = new View(context);
         line.setBackgroundColor(0x33FFFFFF);
@@ -194,7 +239,8 @@ final class SideSheet {
         wireDismiss(body, dialog);
         track(dialog);
         dialog.show();
-        focusSheet(dialog, body);
+        // 带标题栏按钮时从 root 收焦点，才能把按钮纳入上下导航；否则维持原样落在当前勾选项
+        focusSheet(dialog, actionBtn != null ? root : body);
     }
 
     private static final class Click {

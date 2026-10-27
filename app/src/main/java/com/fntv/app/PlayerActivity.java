@@ -514,6 +514,7 @@ public class PlayerActivity extends AppCompatActivity {
                 if (itemGuid != null && !itemGuid.isEmpty()) return itemGuid;
                 return mediaGuid != null ? mediaGuid : "";
             }
+            @Override public void onSubtitleSizeRequested() { showSubtitleSizeSheet(); }
             @Override public FnApiManager getApiManager() { return apiManager; }
             @Override public Context getContext() { return PlayerActivity.this; }
             @Override public SharedPreferences getPrefs() { return getSharedPreferences("fntv_prefs", MODE_PRIVATE); }
@@ -1300,6 +1301,46 @@ public class PlayerActivity extends AppCompatActivity {
                         5000            // BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
                 )
                 .build();
+    }
+
+    /** 字幕大小档位：屏高百分比。默认「大 = 6.5%」，电视三米外看得清。 */
+    private static final float[] SUBTITLE_SCALES = {0.035f, 0.053f, 0.065f, 0.080f, 0.100f, 0.120f};
+    private static final String[] SUBTITLE_SCALE_NAMES = {"小", "标准", "大", "特大", "超大", "极大"};
+    private static final int SUBTITLE_SCALE_DEFAULT_INDEX = 2;
+
+    private float currentSubtitleScale() {
+        return getSharedPreferences("fntv_prefs", MODE_PRIVATE)
+                .getFloat(SubtitleMergeOverlay.PREF_FONT_SCALE, SubtitleMergeOverlay.DEFAULT_FONT_SCALE);
+    }
+
+    private int subtitleScaleIndex() {
+        float cur = currentSubtitleScale();
+        int idx = SUBTITLE_SCALE_DEFAULT_INDEX;
+        float best = Float.MAX_VALUE;
+        for (int i = 0; i < SUBTITLE_SCALES.length; i++) {
+            float d = Math.abs(SUBTITLE_SCALES[i] - cur);
+            if (d < best) { best = d; idx = i; }
+        }
+        return idx;
+    }
+
+    /** 字幕列表右上角「字号」→ 选档位，立即生效。 */
+    private void showSubtitleSizeSheet() {
+        int sel = subtitleScaleIndex();
+        java.util.ArrayList<SideSheet.Choice> choices = new java.util.ArrayList<>();
+        for (int i = 0; i < SUBTITLE_SCALES.length; i++) {
+            String detail = "约屏高 " + String.format(java.util.Locale.US, "%.1f", SUBTITLE_SCALES[i] * 100) + "%";
+            if (i == SUBTITLE_SCALE_DEFAULT_INDEX) detail += "   推荐";
+            choices.add(new SideSheet.Choice(SUBTITLE_SCALE_NAMES[i], detail, null));
+        }
+        SideSheet.showCards(this, "字幕大小", "当前: " + SUBTITLE_SCALE_NAMES[sel],
+                choices, sel, "", (dialog, which) -> {
+                    if (which < 0 || which >= SUBTITLE_SCALES.length) return;
+                    getSharedPreferences("fntv_prefs", MODE_PRIVATE)
+                            .edit().putFloat(SubtitleMergeOverlay.PREF_FONT_SCALE, SUBTITLE_SCALES[which]).apply();
+                    if (subtitleMerge != null) subtitleMerge.reloadFontScale();
+                    AppToast.show(this, "字幕大小: " + SUBTITLE_SCALE_NAMES[which]);
+                });
     }
 
     /** 倍速从右侧栏点选，当前档用勾标出。 */

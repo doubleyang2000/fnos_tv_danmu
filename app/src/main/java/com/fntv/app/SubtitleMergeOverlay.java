@@ -1,6 +1,8 @@
 package com.fntv.app;
 
+import android.content.Context;
 import android.graphics.Color;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -19,6 +21,12 @@ import java.util.List;
 public class SubtitleMergeOverlay {
 
     private static final long MATCH_WINDOW_MS = 80;
+
+    /** 字幕字号偏好（相对父容器高度的比例） */
+    public static final String PREF_FONT_SCALE = "subtitle_font_scale";
+    /** 默认 6.5% —— 比 ExoPlayer 官方 5.33% 大一档，电视机三米外看得清 */
+    public static final float DEFAULT_FONT_SCALE = 0.065f;
+
     private final TextView overlay;
     private final FrameLayout parent;
     private List<CharSequence> prevTexts = new ArrayList<>();
@@ -26,6 +34,7 @@ public class SubtitleMergeOverlay {
     private boolean hasMerged = false;
     private boolean enabled = true;
     private View subtitleView; // ExoPlayer 原版字幕视图
+    private float fontScale = DEFAULT_FONT_SCALE;
 
     public SubtitleMergeOverlay(FrameLayout parent) {
         this.parent = parent;
@@ -37,14 +46,46 @@ public class SubtitleMergeOverlay {
         lp.bottomMargin = (int) (20 * parent.getResources().getDisplayMetrics().density);
         overlay.setLayoutParams(lp);
         overlay.setTextColor(Color.WHITE);
-        overlay.setTextSize(22);
-        overlay.setShadowLayer(3, 0, 2, Color.BLACK);
         overlay.setGravity(Gravity.CENTER);
         overlay.setVisibility(View.GONE);
-        overlay.setLineSpacing(6, 1);
         overlay.setPadding((int)(16 * parent.getResources().getDisplayMetrics().density), 0,
                 (int)(16 * parent.getResources().getDisplayMetrics().density), 0);
+        // 字号按屏高百分比算（原来写死 22sp，4K 电视上只有屏高 2%）
+        fontScale = parent.getContext()
+                .getSharedPreferences("fntv_prefs", Context.MODE_PRIVATE)
+                .getFloat(PREF_FONT_SCALE, DEFAULT_FONT_SCALE);
+        applyTextSize();
+        // 首帧布局完成、切分辨率、旋转时重算
+        parent.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if ((b - t) != (ob - ot) || (r - l) != (or - ol)) applyTextSize();
+        });
         parent.addView(overlay, 1); // 插入在 PlayerView 之后、UI 控件之前
+    }
+
+    /** 按父容器高度百分比设置字号，行距与阴影等比缩放。 */
+    private void applyTextSize() {
+        int h = parent.getHeight();
+        if (h <= 0) h = parent.getResources().getDisplayMetrics().heightPixels;
+        float px = h * fontScale;
+        // 竖屏手机这类高窄画面按高度算会过大，纵向时再用宽度设一道上限
+        int w = parent.getWidth();
+        if (w <= 0) w = parent.getResources().getDisplayMetrics().widthPixels;
+        if (h > w) {
+            float maxPx = w * 0.06f;
+            if (px > maxPx) px = maxPx;
+        }
+        if (px < 8f) px = 8f;
+        overlay.setTextSize(TypedValue.COMPLEX_UNIT_PX, px);
+        overlay.setLineSpacing(px * 0.30f, 1f);
+        overlay.setShadowLayer(px * 0.07f, 0f, px * 0.025f, Color.BLACK);
+    }
+
+    /** 重新读取偏好并立即生效（设置里改完字号后调用） */
+    public void reloadFontScale() {
+        fontScale = overlay.getContext()
+                .getSharedPreferences("fntv_prefs", Context.MODE_PRIVATE)
+                .getFloat(PREF_FONT_SCALE, DEFAULT_FONT_SCALE);
+        applyTextSize();
     }
 
     public void setEnabled(boolean enabled) { this.enabled = enabled; }

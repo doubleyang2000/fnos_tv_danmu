@@ -46,6 +46,8 @@ public class CloudStreamManager {
         void probeWithMediaExtractor();
         void onCloudBtnVisibilityChanged(boolean vis);
         void runOnUiThread(Runnable r);
+        /** 字幕列表右上角点了「字号」。 */
+        void onSubtitleSizeRequested();
     }
 
     /** Stream API 解析出的音视频元数据（传给 Activity 更新信息面板） */
@@ -865,7 +867,8 @@ public class CloudStreamManager {
         } else if (trackInfo == null) {
             AppToast.show(activity, "字幕信息尚未就绪");
         } else {
-            SideSheet.showCards(activity, "字幕", "字幕列表",
+            SideSheet.showCards(activity, "字幕", "字号", d -> { d.dismiss(); cb.onSubtitleSizeRequested(); },
+                    "字幕列表",
                     java.util.Collections.<SideSheet.Choice>emptyList(), -1, "当前没有字幕可选择", null);
         }
     }
@@ -913,7 +916,8 @@ public class CloudStreamManager {
         }
 
         final String[] items = itemLabels.toArray(new String[0]);
-        SideSheet.showCards(activity, "字幕", "字幕列表", trackChoices(items), trackSelected(items, lastSubtitleTrackLabel), "当前没有字幕可选择", (dialog, which) -> {
+        SideSheet.showCards(activity, "字幕", "字号", d -> { d.dismiss(); cb.onSubtitleSizeRequested(); },
+                "字幕列表", trackChoices(items), trackSelected(items, lastSubtitleTrackLabel), "当前没有字幕可选择", (dialog, which) -> {
                     if (which < 0 || which >= itemLabels.size()) return;
                     int selGroup = itemGroupIdx.get(which);
                     int selTrack = itemTrackIdx.get(which);
@@ -971,7 +975,8 @@ public class CloudStreamManager {
             items[i + 1] = text;
             keys[i + 1] = subtitleMatchKey(ssi.title, ssi.language);
         }
-        SideSheet.showCards(activity, "字幕", "字幕列表", trackChoices(items), trackSelected(items, lastSubtitleTrackLabel), "当前没有字幕可选择", (dialog, which) -> {
+        SideSheet.showCards(activity, "字幕", "字号", d -> { d.dismiss(); cb.onSubtitleSizeRequested(); },
+                "字幕列表", trackChoices(items), trackSelected(items, lastSubtitleTrackLabel), "当前没有字幕可选择", (dialog, which) -> {
                     if (which < 0) return;
                     DefaultTrackSelector selector = (DefaultTrackSelector) player.getTrackSelector();
                     if (which == 0) {
