@@ -517,6 +517,8 @@ public class MainActivity extends AppCompatActivity {
                         FnApiManager.getInstance().setToken(token);
                         SessionGuard.onLogin();
                         prefs.edit().putString("auth_token", token).apply();
+                        // 登录成功 → 记进服务器档案，设置页可快速切换
+                        ServerProfileStore.saveCurrent(MainActivity.this);
                         Log.i(TAG, "HTTP 登录成功！耗时 " + (System.currentTimeMillis() - loginStartTime) + "ms");
                         AppToast.show(MainActivity.this, "登录成功！");
                         startActivity(new Intent(MainActivity.this, HomeActivity.class));

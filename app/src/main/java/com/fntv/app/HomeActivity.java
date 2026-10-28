@@ -50,6 +50,8 @@ public class HomeActivity extends AppCompatActivity {
     private UpdateManager updateManager;
     private RelativeLayout rlDecoderSetting, rlDanmuSetting, rlSeekStep, rlBufferTime;
     private TextView tvSeekStepValue, tvBufferTimeValue;
+    private RelativeLayout rlSwitchServer;
+    private TextView tvSwitchServerValue;
 
     private int currentTab = 0;
     private final List<MediaDbItem> mediaLibraries = new ArrayList<>();
@@ -269,6 +271,8 @@ public class HomeActivity extends AppCompatActivity {
         tvBufferTimeValue = findViewById(R.id.tvBufferTimeValue);
         tvDanmuUrl = findViewById(R.id.tvDanmuUrl);
         tvSettingServer.setText(prefs.getString("host", ""));
+        rlSwitchServer = findViewById(R.id.rlSwitchServer);
+        tvSwitchServerValue = findViewById(R.id.tvSwitchServerValue);
 
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout homeSwipe = findViewById(R.id.homeSwipeRefresh);
         if (homeSwipe != null) {
@@ -4145,6 +4149,12 @@ public class HomeActivity extends AppCompatActivity {
         tvDecoderValue.setText("hardware".equals(d) ? "硬解" : "软解");
         rlDecoderSetting.setOnClickListener(v -> toggleDecoder());
 
+        // 切换服务器
+        if (rlSwitchServer != null) {
+            rlSwitchServer.setOnClickListener(v -> showServerPicker());
+        }
+        refreshSwitchServerValue();
+
         // 弹幕服务器
         String danmuUrl = prefs.getString("danmu_url", "");
         if (danmuUrl.isEmpty()) {
@@ -4228,6 +4238,215 @@ public class HomeActivity extends AppCompatActivity {
             }
             @Override public void onFailure(Call<ApiResponse<UserInfoResponse>> call, Throwable t) {}
         });
+    }
+
+    // ==================== 切换服务器 ====================
+
+    /** 刷新设置页右侧显示的当前服务器名 */
+    private void refreshSwitchServerValue() {
+        if (tvSwitchServerValue == null) return;
+        String host = prefs.getString("host", "");
+        if (host.isEmpty()) {
+            tvSwitchServerValue.setText("未登录");
+            return;
+        }
+        ServerProfileStore.Profile p = ServerProfileStore.current(this);
+        tvSwitchServerValue.setText(p != null ? p.displayName() : host.replaceFirst("^https?://", ""));
+    }
+
+    /** 服务器列表：点一行就切过去，自动登录 */
+    private void showServerPicker() {
+        final List<ServerProfileStore.Profile> profiles = ServerProfileStore.list(this);
+        if (profiles.isEmpty()) {
+            AppToast.show(this, "还没有保存的服务器，先登录一次", true);
+            return;
+        }
+
+        final android.app.Dialog dialog = new android.app.Dialog(
+                this, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar);
+        android.view.Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            int width = (int) (getResources().getDisplayMetrics().widthPixels * 0.86f);
+            int max = dp(440);
+            if (width > max) width = max;
+            window.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundResource(R.drawable.bg_card);
+        root.setPadding(dp(20), dp(18), dp(20), dp(16));
+
+        TextView title = new TextView(this);
+        title.setText("切换服务器");
+        title.setTextColor(color(R.color.text_primary));
+        title.setTextSize(18);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        root.addView(title);
+
+        TextView hint = new TextView(this);
+        hint.setText("选择后会自动登录，观看记录按服务器分开保存");
+        hint.setTextColor(color(R.color.text_secondary));
+        hint.setTextSize(12);
+        hint.setPadding(0, dp(6), 0, dp(10));
+        root.addView(hint);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        scroll.setFocusable(false);
+        scroll.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list);
+        root.addView(scroll);
+
+        final String curHost = prefs.getString("host", "");
+        final List<View> focusables = new ArrayList<>();
+
+        for (int i = 0; i < profiles.size(); i++) {
+            final ServerProfileStore.Profile p = profiles.get(i);
+            boolean isCurrent = p.sameHost(curHost);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
+            rowLp.bottomMargin = dp(8);
+            row.setLayoutParams(rowLp);
+            row.setBackgroundResource(R.drawable.bg_input);
+            row.setFocusable(true);
+            row.setPadding(dp(12), 0, dp(12), 0);
+
+            LinearLayout texts = new LinearLayout(this);
+            texts.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams textsLp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            texts.setLayoutParams(textsLp);
+
+            TextView name = new TextView(this);
+            name.setText((isCurrent ? "✓ " : "") + p.displayName());
+            name.setTextColor(isCurrent ? color(R.color.colorAccent) : color(R.color.text_primary));
+            name.setTextSize(15);
+            texts.addView(name);
+
+            TextView sub = new TextView(this);
+            String user = p.user == null || p.user.isEmpty() ? "未知用户" : p.user;
+            sub.setText(user + (p.pass != null && !p.pass.isEmpty() ? "  · 已保存密码" : "  · 未保存密码"));
+            sub.setTextColor(color(R.color.text_secondary));
+            sub.setTextSize(12);
+            sub.setPadding(0, dp(2), 0, 0);
+            texts.addView(sub);
+
+            row.addView(texts);
+            row.setOnClickListener(v -> {
+                dialog.dismiss();
+                switchToServer(p);
+            });
+            list.addView(row);
+            focusables.add(row);
+        }
+
+        // 底部按钮行：删除当前 / 关闭
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(android.view.Gravity.CENTER);
+        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        actionsLp.topMargin = dp(8);
+        actions.setLayoutParams(actionsLp);
+
+        Button del = new Button(this);
+        del.setText("删除当前");
+        del.setAllCaps(false);
+        del.setTextSize(14);
+        del.setTextColor(color(R.color.text_secondary));
+        del.setBackgroundResource(R.drawable.bg_input);
+        del.setFocusable(true);
+        del.setMinWidth(0);
+        del.setMinHeight(0);
+        LinearLayout.LayoutParams delLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        delLp.rightMargin = dp(6);
+        del.setLayoutParams(delLp);
+        del.setOnClickListener(v -> {
+            if (curHost.isEmpty()) return;
+            dialog.dismiss();
+            confirmDeleteServer(curHost);
+        });
+        actions.addView(del);
+
+        Button close = new Button(this);
+        close.setText("关闭");
+        close.setAllCaps(false);
+        close.setTextSize(14);
+        close.setTextColor(color(R.color.text_primary));
+        close.setBackgroundResource(R.drawable.bg_btn_primary);
+        close.setFocusable(true);
+        close.setMinWidth(0);
+        close.setMinHeight(0);
+        close.setLayoutParams(new LinearLayout.LayoutParams(0, dp(44), 1f));
+        close.setOnClickListener(v -> dialog.dismiss());
+        actions.addView(close);
+
+        root.addView(actions);
+        dialog.setContentView(root);
+
+        // 焦点：竖排列表上下走，最后一行下到按钮行
+        TvFocus.bindChain(focusables);
+        if (!focusables.isEmpty()) {
+            TvFocus.bindVertical(
+                    Collections.singletonList(focusables.get(focusables.size() - 1)),
+                    Arrays.asList(del, close));
+            TvFocus.point(focusables.get(0), View.FOCUS_UP, focusables.get(0));
+        }
+        TvFocus.bindRow(Arrays.asList(del, close));
+        for (View v : focusables) TvFocus.point(v, View.FOCUS_LEFT, v);
+        for (View v : focusables) TvFocus.point(v, View.FOCUS_RIGHT, v);
+        TvFocus.point(del, View.FOCUS_DOWN, del);
+        TvFocus.point(close, View.FOCUS_DOWN, close);
+        TvFocus.point(del, View.FOCUS_UP, focusables.get(focusables.size() - 1));
+        TvFocus.point(close, View.FOCUS_UP, focusables.get(focusables.size() - 1));
+        TvFocus.sealAll(focusables);
+
+        dialog.show();
+
+        // 焦点落在当前服务器那一行
+        int curIndex = 0;
+        for (int i = 0; i < profiles.size(); i++) {
+            if (profiles.get(i).sameHost(curHost)) { curIndex = i; break; }
+        }
+        final View focusTarget = focusables.get(curIndex);
+        focusTarget.post(focusTarget::requestFocus);
+    }
+
+    private void confirmDeleteServer(final String host) {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("删除服务器")
+                .setMessage("从列表中移除 " + host.replaceFirst("^https?://", "") + "？\n不会退出当前登录。")
+                .setPositiveButton("删除", (d, w) -> {
+                    ServerProfileStore.remove(this, host);
+                    refreshSwitchServerValue();
+                    AppToast.show(this, "已删除");
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 切换服务器：写 prefs → 重启到登录页（restoreSession 会自动登录进主页） */
+    private void switchToServer(ServerProfileStore.Profile p) {
+        ServerProfileStore.applyToPrefs(this, p);
+        AppToast.show(this, "正在切换到 " + p.displayName());
+
+        // 清掉内存里的旧 token / 旧 baseUrl，避免带着上一个服务器的状态
+        FnApiManager.getInstance().setToken(null);
+        FnApiManager.getInstance().updateBaseUrl(p.host);
+
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(intent);
+        finish();
     }
 
 
@@ -4923,6 +5142,7 @@ public class HomeActivity extends AppCompatActivity {
         if (rlSeekStep != null) items.add(rlSeekStep);
         if (rlBufferTime != null) items.add(rlBufferTime);
         if (rlDanmuSetting != null) items.add(rlDanmuSetting);
+        if (rlSwitchServer != null) items.add(rlSwitchServer);
         View checkUpdate = findViewById(R.id.btnCheckUpdate);
         if (checkUpdate != null) items.add(checkUpdate);
         if (btnFeedback != null) items.add(btnFeedback);
