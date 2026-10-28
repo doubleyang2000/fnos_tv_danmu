@@ -48,6 +48,9 @@
 - **添加手动刷新，手机端支持下拉刷新，TV端点击刷新按钮刷新**
 
 ## 本项目随缘更新，目前的改动已满足日常使用，如有更深的需求，请自行研究开发。
+
+## 在fork基础上加了字幕字号调节和服务器切换
+
 ## 效果展示：
 <p align="center">
 <img width="200" height="200" alt="FNTV_danmu" src="https://github.com/user-attachments/assets/50a69034-0390-4383-86ce-520bfa12b422" />
